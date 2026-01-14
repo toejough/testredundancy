@@ -3,6 +3,7 @@ package discovery
 
 import (
 	"go/ast"
+	"strings"
 )
 
 // TestInfo represents a test function with its package.
@@ -51,4 +52,20 @@ func HasParallelCall(body *ast.BlockStmt) bool {
 	})
 
 	return found
+}
+
+// ParseTestOutput parses the output of "go test -list ." and returns test info.
+func ParseTestOutput(pkg string, output string) []TestInfo {
+	var tests []TestInfo
+
+	lines := strings.Split(output, "\n")
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Test") {
+			tests = append(tests, TestInfo{Pkg: pkg, Name: line})
+		}
+	}
+
+	return tests
 }
