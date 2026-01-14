@@ -1,0 +1,109 @@
+package coverage_test
+
+import (
+	"testing"
+
+	"github.com/onsi/gomega"
+	"github.com/toejough/testredundancy/internal/coverage"
+	"pgregory.net/rapid"
+)
+
+func TestParseBlockID_ValidFormat(t *testing.T) {
+	t.Parallel()
+	expect := gomega.NewWithT(t)
+
+	file, startLine, startCol, endLine, endCol, err := coverage.ParseBlockID(
+		"github.com/user/repo/file.go:10.5,20.15")
+
+	expect.Expect(err).NotTo(gomega.HaveOccurred())
+	expect.Expect(file).To(gomega.Equal("github.com/user/repo/file.go"))
+	expect.Expect(startLine).To(gomega.Equal(10))
+	expect.Expect(startCol).To(gomega.Equal(5))
+	expect.Expect(endLine).To(gomega.Equal(20))
+	expect.Expect(endCol).To(gomega.Equal(15))
+}
+
+func TestParseBlockID_InvalidFormat(t *testing.T) {
+	t.Parallel()
+	expect := gomega.NewWithT(t)
+
+	// Missing colon
+	_, _, _, _, _, err := coverage.ParseBlockID("file.go10.5,20.15")
+	expect.Expect(err).To(gomega.HaveOccurred())
+
+	// Missing comma
+	_, _, _, _, _, err = coverage.ParseBlockID("file.go:10.520.15")
+	expect.Expect(err).To(gomega.HaveOccurred())
+
+	// Missing dot in start position
+	_, _, _, _, _, err = coverage.ParseBlockID("file.go:105,20.15")
+	expect.Expect(err).To(gomega.HaveOccurred())
+}
+
+func TestParseBlock_ValidLine(t *testing.T) {
+	t.Parallel()
+	expect := gomega.NewWithT(t)
+
+	block, err := coverage.ParseBlock("github.com/repo/file.go:10.5,20.15 3 1")
+
+	expect.Expect(err).NotTo(gomega.HaveOccurred())
+	expect.Expect(block.File).To(gomega.Equal("github.com/repo/file.go"))
+	expect.Expect(block.StartLine).To(gomega.Equal(10))
+	expect.Expect(block.StartCol).To(gomega.Equal(5))
+	expect.Expect(block.EndLine).To(gomega.Equal(20))
+	expect.Expect(block.EndCol).To(gomega.Equal(15))
+	expect.Expect(block.Statements).To(gomega.Equal(3))
+	expect.Expect(block.Count).To(gomega.Equal(1))
+}
+
+func TestParseBlock_InvalidLine(t *testing.T) {
+	t.Parallel()
+	expect := gomega.NewWithT(t)
+
+	// Missing fields
+	_, err := coverage.ParseBlock("file.go:10.5,20.15 3")
+	expect.Expect(err).To(gomega.HaveOccurred())
+
+	// Too many fields
+	_, err = coverage.ParseBlock("file.go:10.5,20.15 3 1 extra")
+	expect.Expect(err).To(gomega.HaveOccurred())
+}
+
+func TestParseBlock_RoundTrip(t *testing.T) {
+	t.Parallel()
+
+	rapid.Check(t, func(rt *rapid.T) {
+		expect := gomega.NewWithT(rt)
+
+		// Generate valid block components
+		file := rapid.StringMatching(`[a-zA-Z0-9/_.-]+\.go`).Draw(rt, "file")
+		startLine := rapid.IntRange(1, 10000).Draw(rt, "startLine")
+		startCol := rapid.IntRange(1, 200).Draw(rt, "startCol")
+		endLine := rapid.IntRange(startLine, startLine+100).Draw(rt, "endLine")
+		endCol := rapid.IntRange(1, 200).Draw(rt, "endCol")
+		statements := rapid.IntRange(0, 100).Draw(rt, "statements")
+		count := rapid.IntRange(0, 1000).Draw(rt, "count")
+
+		// Format as coverage line
+		line := coverage.FormatBlock(coverage.Block{
+			File:       file,
+			StartLine:  startLine,
+			StartCol:   startCol,
+			EndLine:    endLine,
+			EndCol:     endCol,
+			Statements: statements,
+			Count:      count,
+		})
+
+		// Parse should recover original values
+		block, err := coverage.ParseBlock(line)
+		expect.Expect(err).NotTo(gomega.HaveOccurred())
+		expect.Expect(block.File).To(gomega.Equal(file))
+		expect.Expect(block.StartLine).To(gomega.Equal(startLine))
+		expect.Expect(block.StartCol).To(gomega.Equal(startCol))
+		expect.Expect(block.EndLine).To(gomega.Equal(endLine))
+		expect.Expect(block.EndCol).To(gomega.Equal(endCol))
+		expect.Expect(block.Statements).To(gomega.Equal(statements))
+		expect.Expect(block.Count).To(gomega.Equal(count))
+	})
+}
