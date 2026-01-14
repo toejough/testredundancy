@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strconv"
@@ -72,27 +73,11 @@ func run(args []string) error {
 		}
 	}
 
-	// For now, just print the config (full analysis not yet implemented)
-	fmt.Println("Test Redundancy Analysis")
-	fmt.Println("========================")
-	fmt.Printf("Package to analyze: %s\n", config.PackageToAnalyze)
-	fmt.Printf("Coverage threshold: %.1f%%\n", config.CoverageThreshold)
-
-	if config.CoveragePackages != "" {
-		fmt.Printf("Coverage packages:  %s\n", config.CoveragePackages)
+	// Run the analysis
+	_, err = testredundancy.Find(context.Background(), config)
+	if err != nil {
+		return fmt.Errorf("analysis failed: %w", err)
 	}
-
-	if len(config.BaselineTests) > 0 {
-		fmt.Printf("Baseline packages:  %d\n", len(config.BaselineTests))
-
-		for _, spec := range config.BaselineTests {
-			fmt.Printf("  - %s\n", spec.Package)
-		}
-	}
-
-	fmt.Println()
-	fmt.Println("Note: Full analysis not yet implemented.")
-	fmt.Println("Use the testredundancy package API directly for now.")
 
 	return nil
 }
