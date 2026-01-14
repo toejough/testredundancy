@@ -137,3 +137,29 @@ func MergeBlocks(content string) (string, error) {
 
 	return result.String(), nil
 }
+
+// FilterQtpl removes .qtpl entries from coverage content.
+// These are typically generated template files that shouldn't be counted.
+func FilterQtpl(content string) (string, error) {
+	if content == "" {
+		return "", fmt.Errorf("empty coverage content")
+	}
+
+	lines := strings.Split(content, "\n")
+	if len(lines) == 0 {
+		return "", fmt.Errorf("empty coverage content")
+	}
+
+	// Keep mode line, filter out .qtpl entries
+	filtered := []string{lines[0]} // mode line
+
+	for _, line := range lines[1:] {
+		if line == "" || strings.Contains(line, ".qtpl:") {
+			continue
+		}
+
+		filtered = append(filtered, line)
+	}
+
+	return strings.Join(filtered, "\n"), nil
+}
