@@ -2,7 +2,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"go/ast"
@@ -17,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	executil "github.com/toejough/testredundancy/internal/exec"
 )
 
 func main() {
@@ -124,7 +125,7 @@ func detectParallelTests(tests []testInfo) map[string]bool {
 
 	for pkg, pkgTests := range testsByPkg {
 		// Get the directory for this package
-		pkgDir, err := output(context.Background(), "go", "list", "-f", "{{.Dir}}", pkg)
+		pkgDir, err := executil.Output(context.Background(), "go", "list", "-f", "{{.Dir}}", pkg)
 		if err != nil {
 			continue
 		}
@@ -241,7 +242,7 @@ func findRedundantTestsWithConfig(config RedundancyConfig) error {
 	for _, spec := range config.BaselineTests {
 		if spec.TestPattern != "" {
 			// Resolve package path to full module path for consistent matching
-			fullPkg, err := output(context.Background(), "go", "list", spec.Package)
+			fullPkg, err := executil.Output(context.Background(), "go", "list", spec.Package)
 			if err != nil {
 				return fmt.Errorf("failed to resolve package %s: %w", spec.Package, err)
 			}
@@ -303,10 +304,10 @@ func findRedundantTestsWithConfig(config RedundancyConfig) error {
 
 	// Helper to run a single test and collect coverage
 	runSingleTest := func(test testInfo) bool {
-		coverFile := fmt.Sprintf("cov_%s_%s.out", sanitize(filepath.Base(test.pkg)), test.name)
+		coverFile := fmt.Sprintf("cov_%s_%s.out", executil.Sanitize(filepath.Base(test.pkg)), test.name)
 		coverFileRaw := coverFile + ".raw"
 
-		testErr := runQuietCoverage("go", "test", "-count=1", "-coverprofile="+coverFileRaw, "-coverpkg="+coverpkg,
+		testErr := executil.RunQuietCoverage("go", "test", "-count=1", "-coverprofile="+coverFileRaw, "-coverpkg="+coverpkg,
 			"-run", "^"+test.name+"$", test.pkg)
 
 		if testErr != nil {
@@ -375,10 +376,10 @@ func findRedundantTestsWithConfig(config RedundancyConfig) error {
 				sem <- struct{}{}
 				defer func() { <-sem }()
 
-				coverFile := fmt.Sprintf("cov_%s_%s.out", sanitize(filepath.Base(test.pkg)), test.name)
+				coverFile := fmt.Sprintf("cov_%s_%s.out", executil.Sanitize(filepath.Base(test.pkg)), test.name)
 				coverFileRaw := coverFile + ".raw"
 
-				testErr := runQuietCoverage("go", "test", "-count=1", "-coverprofile="+coverFileRaw, "-coverpkg="+coverpkg,
+				testErr := executil.RunQuietCoverage("go", "test", "-count=1", "-coverprofile="+coverFileRaw, "-coverpkg="+coverpkg,
 					"-run", "^"+test.name+"$", test.pkg)
 
 				current := atomic.AddInt32(&completed, 1)
@@ -510,7 +511,7 @@ func findRedundantTestsWithConfig(config RedundancyConfig) error {
 			}
 		} else {
 			// Merge candidate with current merged coverage (just 2 files!)
-			mergedFile := fmt.Sprintf("merged_%s.out", sanitize(qName))
+			mergedFile := fmt.Sprintf("merged_%s.out", executil.Sanitize(qName))
 
 			mergeErr := mergeMultipleCoverageFiles([]string{mergedSoFar, coverFile}, mergedFile)
 			if mergeErr != nil {
@@ -914,7 +915,7 @@ func hasParallelCall(body *ast.BlockStmt) bool {
 // listTestFunctionsWithPackages lists all test functions with their packages.
 func listTestFunctionsWithPackages(pkgPattern string) ([]testInfo, error) {
 	// First, expand the package pattern to get actual packages
-	listOut, err := output(context.Background(), "go", "list", pkgPattern)
+	listOut, err := executil.Output(context.Background(), "go", "list", pkgPattern)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list packages: %w", err)
 	}
@@ -927,7 +928,7 @@ func listTestFunctionsWithPackages(pkgPattern string) ([]testInfo, error) {
 			continue
 		}
 
-		out, err := output(context.Background(), "go", "test", "-list", ".", pkg)
+		out, err := executil.Output(context.Background(), "go", "test", "-list", ".", pkg)
 		if err != nil {
 			// Package may have no tests, skip it
 			continue
@@ -1092,19 +1093,6 @@ func mergeMultipleCoverageFiles(files []string, outputFile string) error {
 	return mergeCoverageBlocksFile(outputFile)
 }
 
-// output runs a command and captures stdout only (stderr goes to os.Stderr).
-func output(ctx context.Context, command string, args ...string) (string, error) {
-	buf := &bytes.Buffer{}
-	cmd := exec.CommandContext(ctx, command, args...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = buf
-	cmd.Stderr = os.Stderr
-	err := cmd.Run()
-
-	return strings.TrimSuffix(buf.String(), "\n"), err
-}
-
-
 func parseBlockID(blockID string) (file string, startLine, startCol, endLine, endCol int, err error) {
 	fileParts := strings.Split(blockID, ":")
 	if len(fileParts) != 2 {
@@ -1165,45 +1153,3 @@ func parseCoverageBlock(line string) (coverageBlock, error) {
 }
 
 
-// about packages not matching coverage patterns.
-func runQuietCoverage(command string, arg ...string) error {
-	cmd := exec.Command(command, arg...)
-	cmd.Stdin = os.Stdin
-
-	// Capture stderr to filter out coverage warnings
-	var stderrBuf bytes.Buffer
-	cmd.Stderr = &stderrBuf
-
-	err := cmd.Run()
-
-	// Filter and display stderr, removing expected coverage warnings
-	stderrLines := strings.Split(stderrBuf.String(), "\n")
-
-	for _, line := range stderrLines {
-		// Skip the "no packages being tested depend on matches" warning
-		if strings.Contains(line, "no packages being tested depend on matches") {
-			continue
-		}
-		// Skip empty lines
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		// Show other stderr output
-		fmt.Fprintln(os.Stderr, line)
-	}
-
-	return err
-}
-
-// sanitize makes a string safe for use in filenames.
-func sanitize(s string) string {
-	// Replace characters that are problematic in filenames
-	replacer := strings.NewReplacer(
-		"/", "_",
-		"\\", "_",
-		":", "_",
-		".", "_",
-	)
-
-	return replacer.Replace(s)
-}
