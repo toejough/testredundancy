@@ -159,3 +159,42 @@ func TestMergeBlocks_HandlesEmptyInput(t *testing.T) {
 	expect.Expect(err).NotTo(gomega.HaveOccurred())
 	expect.Expect(result).To(gomega.BeEmpty())
 }
+
+func TestFilterQtpl_RemovesQtplEntries(t *testing.T) {
+	t.Parallel()
+	expect := gomega.NewWithT(t)
+
+	input := `mode: set
+file.go:10.5,20.15 3 1
+template.qtpl:5.1,10.5 2 1
+other.go:30.1,40.10 5 1
+`
+	result, err := coverage.FilterQtpl(input)
+
+	expect.Expect(err).NotTo(gomega.HaveOccurred())
+	lines := strings.Split(strings.TrimSpace(result), "\n")
+	expect.Expect(lines).To(gomega.HaveLen(3)) // mode + 2 non-qtpl files
+	expect.Expect(result).NotTo(gomega.ContainSubstring(".qtpl"))
+}
+
+func TestFilterQtpl_PreservesModeLine(t *testing.T) {
+	t.Parallel()
+	expect := gomega.NewWithT(t)
+
+	input := `mode: atomic
+file.go:10.5,20.15 3 1
+`
+	result, err := coverage.FilterQtpl(input)
+
+	expect.Expect(err).NotTo(gomega.HaveOccurred())
+	expect.Expect(result).To(gomega.HavePrefix("mode: atomic\n"))
+}
+
+func TestFilterQtpl_HandlesEmptyInput(t *testing.T) {
+	t.Parallel()
+	expect := gomega.NewWithT(t)
+
+	_, err := coverage.FilterQtpl("")
+
+	expect.Expect(err).To(gomega.HaveOccurred())
+}
