@@ -1,0 +1,15 @@
+# Build outputs
+bin/
+*.exe
+
+# Coverage files
+*.out
+coverage.out
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
