@@ -197,3 +197,40 @@ func ParseFunctionCoverage(output string) (map[string]float64, error) {
 
 	return funcs, nil
 }
+
+// MergeContents merges multiple coverage file contents into a single result.
+// It filters out .qtpl entries and merges duplicate blocks by summing counts.
+func MergeContents(contents []string) (string, error) {
+	if len(contents) == 0 {
+		return "", fmt.Errorf("no contents to merge")
+	}
+
+	var mode string
+	var allBlocks []string
+
+	for i, content := range contents {
+		lines := strings.Split(content, "\n")
+		if len(lines) == 0 {
+			continue
+		}
+
+		// Use mode from first content
+		if i == 0 {
+			mode = lines[0]
+		}
+
+		// Append blocks (skip mode line and .qtpl files)
+		for _, line := range lines[1:] {
+			if line == "" || strings.Contains(line, ".qtpl:") {
+				continue
+			}
+
+			allBlocks = append(allBlocks, line)
+		}
+	}
+
+	// Combine and merge duplicate blocks
+	combined := mode + "\n" + strings.Join(allBlocks, "\n")
+
+	return MergeBlocks(combined)
+}
