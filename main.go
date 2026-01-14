@@ -8,7 +8,6 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -17,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/toejough/testredundancy/internal/coverage"
 	executil "github.com/toejough/testredundancy/internal/exec"
 )
 
@@ -90,16 +90,6 @@ type RedundancyConfig struct {
 	CoverageThreshold float64            // Percentage threshold (e.g., 80.0 for 80%)
 	PackageToAnalyze  string             // Package containing tests to analyze (e.g., "./impgen/run")
 	CoveragePackages  string             // Packages to measure coverage for (e.g., "./impgen/...,./imptest/...")
-}
-
-type coverageBlock struct {
-	file       string
-	startLine  int
-	startCol   int
-	endLine    int
-	endCol     int
-	statements int
-	count      int
 }
 
 type testInfo struct {
@@ -186,40 +176,6 @@ func detectParallelTests(tests []testInfo) map[string]bool {
 	}
 
 	return result
-}
-
-
-// filterQtplFromCoverage removes .qtpl template file entries from a coverage file.
-func filterQtplFromCoverage(inputFile, outputFile string) error {
-	data, err := os.ReadFile(inputFile)
-	if err != nil {
-		return fmt.Errorf("failed to read %s: %w", inputFile, err)
-	}
-
-	lines := strings.Split(string(data), "\n")
-	if len(lines) == 0 {
-		return fmt.Errorf("empty coverage file: %s", inputFile)
-	}
-
-	// Keep mode line, filter out .qtpl entries
-	filtered := []string{lines[0]} // mode line
-
-	for _, line := range lines[1:] {
-		if line == "" || strings.Contains(line, ".qtpl:") {
-			continue
-		}
-
-		filtered = append(filtered, line)
-	}
-
-	result := strings.Join(filtered, "\n")
-
-	err = os.WriteFile(outputFile, []byte(result), 0o600)
-	if err != nil {
-		return fmt.Errorf("failed to write %s: %w", outputFile, err)
-	}
-
-	return nil
 }
 
 
@@ -314,7 +270,7 @@ func findRedundantTestsWithConfig(config RedundancyConfig) error {
 			return false
 		}
 
-		err := filterQtplFromCoverage(coverFileRaw, coverFile)
+		err := coverage.FilterQtpl(coverFileRaw, coverFile)
 		if err != nil {
 			os.Remove(coverFileRaw)
 
@@ -390,7 +346,7 @@ func findRedundantTestsWithConfig(config RedundancyConfig) error {
 					return
 				}
 
-				err := filterQtplFromCoverage(coverFileRaw, coverFile)
+				err := coverage.FilterQtpl(coverFileRaw, coverFile)
 				if err != nil {
 					fmt.Printf("    [%d/%d] %s... FAILED (filter)\n", current, len(parallelSafeTests), test.qualifiedName())
 					os.Remove(coverFileRaw)
@@ -429,12 +385,12 @@ func findRedundantTestsWithConfig(config RedundancyConfig) error {
 
 	totalCoverageFile := "total_coverage.out"
 
-	err = mergeMultipleCoverageFiles(allCoverageFiles, totalCoverageFile)
+	err = coverage.MergeFiles(allCoverageFiles, totalCoverageFile)
 	if err != nil {
 		return fmt.Errorf("failed to merge total coverage: %w", err)
 	}
 
-	targetCoverage, err := getAllFunctionsCoverage(totalCoverageFile)
+	targetCoverage, err := coverage.GetAllFunctionsCoverage(totalCoverageFile)
 	if err != nil {
 		return fmt.Errorf("failed to analyze target coverage: %w", err)
 	}
@@ -498,7 +454,7 @@ func findRedundantTestsWithConfig(config RedundancyConfig) error {
 
 		if mergedSoFar == "" {
 			// First test - check its coverage directly
-			testCov, covErr := getAllFunctionsCoverage(coverFile)
+			testCov, covErr := coverage.GetAllFunctionsCoverage(coverFile)
 			if covErr != nil {
 				return nil
 			}
@@ -513,12 +469,12 @@ func findRedundantTestsWithConfig(config RedundancyConfig) error {
 			// Merge candidate with current merged coverage (just 2 files!)
 			mergedFile := fmt.Sprintf("merged_%s.out", executil.Sanitize(qName))
 
-			mergeErr := mergeMultipleCoverageFiles([]string{mergedSoFar, coverFile}, mergedFile)
+			mergeErr := coverage.MergeFiles([]string{mergedSoFar, coverFile}, mergedFile)
 			if mergeErr != nil {
 				return nil
 			}
 
-			mergedCov, covErr := getAllFunctionsCoverage(mergedFile)
+			mergedCov, covErr := coverage.GetAllFunctionsCoverage(mergedFile)
 			os.Remove(mergedFile)
 
 			if covErr != nil {
@@ -646,14 +602,14 @@ func findRedundantTestsWithConfig(config RedundancyConfig) error {
 			_ = os.WriteFile(newMergedFile, data, 0o600)
 		} else {
 			// Merge with existing
-			_ = mergeMultipleCoverageFiles([]string{currentMergedFile, testCoverageFiles[qName]}, newMergedFile)
+			_ = coverage.MergeFiles([]string{currentMergedFile, testCoverageFiles[qName]}, newMergedFile)
 			os.Remove(currentMergedFile)
 		}
 
 		currentMergedFile = newMergedFile
 
 		// Update current coverage levels from new merged file
-		newCoverage, err := getAllFunctionsCoverage(newMergedFile)
+		newCoverage, err := coverage.GetAllFunctionsCoverage(newMergedFile)
 		if err == nil {
 			for fn := range targetFuncs {
 				if newCov, ok := newCoverage[fn]; ok {
@@ -712,12 +668,12 @@ func findRedundantTestsWithConfig(config RedundancyConfig) error {
 	} else {
 		finalMergedFile := "final_coverage.out"
 
-		err = mergeMultipleCoverageFiles(keptTestFiles, finalMergedFile)
+		err = coverage.MergeFiles(keptTestFiles, finalMergedFile)
 		if err != nil {
 			return fmt.Errorf("failed to merge final coverage: %w", err)
 		}
 
-		finalCoverage, err := getAllFunctionsCoverage(finalMergedFile)
+		finalCoverage, err := coverage.GetAllFunctionsCoverage(finalMergedFile)
 		if err != nil {
 			os.Remove(finalMergedFile)
 
@@ -837,46 +793,6 @@ func findRedundantTestsWithConfig(config RedundancyConfig) error {
 	return nil
 }
 
-// getAllFunctionsCoverage returns a map of function name -> coverage percentage for all functions.
-
-// getAllFunctionsCoverage returns a map of function name -> coverage percentage for all functions.
-func getAllFunctionsCoverage(coverageFile string) (map[string]float64, error) {
-	out, err := exec.Command("go", "tool", "cover", "-func="+coverageFile).Output()
-	if err != nil {
-		return nil, fmt.Errorf("go tool cover failed: %w", err)
-	}
-
-	funcs := make(map[string]float64)
-	lines := strings.Split(string(out), "\n")
-
-	for _, line := range lines {
-		if line == "" || strings.HasPrefix(line, "total:") {
-			continue
-		}
-
-		// Format: file:line:  functionName  percentage%
-		fields := strings.Fields(line)
-		if len(fields) < 3 {
-			continue
-		}
-
-		// Last field is percentage like "85.7%"
-		percentStr := fields[len(fields)-1]
-		percentStr = strings.TrimSuffix(percentStr, "%")
-
-		percent, err := strconv.ParseFloat(percentStr, 64)
-		if err != nil {
-			continue
-		}
-
-		// Function name with location (e.g., "file.go:123: funcName")
-		funcName := strings.Join(fields[0:len(fields)-1], " ")
-		funcs[funcName] = percent
-	}
-
-	return funcs, nil
-}
-
 // hasParallelCall checks if a block statement contains a call to t.Parallel().
 func hasParallelCall(body *ast.BlockStmt) bool {
 	found := false
@@ -947,209 +863,5 @@ func listTestFunctionsWithPackages(pkgPattern string) ([]testInfo, error) {
 	return allTests, nil
 }
 
-// mergeCoverageBlocks merges duplicate coverage blocks in a coverage file.
-
-// mergeCoverageBlocksFile merges coverage blocks in the specified file (in-place).
-func mergeCoverageBlocksFile(filename string) error {
-	data, err := os.ReadFile(filename)
-	if err != nil {
-		return fmt.Errorf("failed to read %s: %w", filename, err)
-	}
-
-	lines := strings.Split(string(data), "\n")
-	if len(lines) == 0 {
-		return nil
-	}
-
-	// Keep the mode line
-	mode := lines[0]
-
-	// Parse all blocks
-	var blocks []coverageBlock
-	blockCounts := make(map[string]int)
-
-	for _, line := range lines[1:] {
-		if line == "" {
-			continue
-		}
-
-		parts := strings.Fields(line)
-		if len(parts) != 3 {
-			continue
-		}
-
-		blockID := parts[0]
-		numStmts, _ := strconv.Atoi(parts[1])
-		count, _ := strconv.Atoi(parts[2])
-
-		file, startLine, startCol, endLine, endCol, err := parseBlockID(blockID)
-		if err != nil {
-			continue
-		}
-
-		// Sum counts for identical blocks
-		blockCounts[blockID] += count
-
-		// Store block for deduplication
-		found := false
-
-		for i, b := range blocks {
-			if b.file == file && b.startLine == startLine && b.startCol == startCol &&
-				b.endLine == endLine && b.endCol == endCol {
-				blocks[i].count = blockCounts[blockID]
-				found = true
-
-				break
-			}
-		}
-
-		if !found {
-			blocks = append(blocks, coverageBlock{
-				file:       file,
-				startLine:  startLine,
-				startCol:   startCol,
-				endLine:    endLine,
-				endCol:     endCol,
-				statements: numStmts,
-				count:      blockCounts[blockID],
-			})
-		}
-	}
-
-	// Rebuild coverage file with deduplicated blocks
-	// Note: We don't split overlapping blocks - go tool cover handles them correctly.
-	// We only deduplicate identical blocks (same start/end positions) by summing counts.
-	var merged []string
-	merged = append(merged, mode)
-
-	// Sort for deterministic output
-	sort.Slice(blocks, func(i, j int) bool {
-		if blocks[i].file != blocks[j].file {
-			return blocks[i].file < blocks[j].file
-		}
-
-		if blocks[i].startLine != blocks[j].startLine {
-			return blocks[i].startLine < blocks[j].startLine
-		}
-
-		return blocks[i].startCol < blocks[j].startCol
-	})
-
-	for _, block := range blocks {
-		blockID := fmt.Sprintf("%s:%d.%d,%d.%d",
-			block.file, block.startLine, block.startCol, block.endLine, block.endCol)
-		merged = append(merged, fmt.Sprintf("%s %d %d", blockID, block.statements, block.count))
-	}
-
-	// Write merged coverage
-	return os.WriteFile(filename, []byte(strings.Join(merged, "\n")+"\n"), 0o600)
-}
-
-// mergeMultipleCoverageFiles merges multiple coverage files into a single output file.
-func mergeMultipleCoverageFiles(files []string, outputFile string) error {
-	if len(files) == 0 {
-		return fmt.Errorf("no files to merge")
-	}
-
-	var mode string
-	var allBlocks []string
-
-	for i, file := range files {
-		data, err := os.ReadFile(file)
-		if err != nil {
-			return fmt.Errorf("failed to read %s: %w", file, err)
-		}
-
-		lines := strings.Split(string(data), "\n")
-		if len(lines) == 0 {
-			continue
-		}
-
-		// Use mode from first file
-		if i == 0 {
-			mode = lines[0]
-		}
-
-		// Append blocks from this file (skip mode line and .qtpl files)
-		for _, line := range lines[1:] {
-			// Skip empty lines and lines referencing .qtpl template files
-			if line == "" || strings.Contains(line, ".qtpl:") {
-				continue
-			}
-
-			allBlocks = append(allBlocks, line)
-		}
-	}
-
-	// Write combined file
-	combined := mode + "\n" + strings.Join(allBlocks, "\n")
-
-	err := os.WriteFile(outputFile, []byte(combined), 0o600)
-	if err != nil {
-		return fmt.Errorf("failed to write %s: %w", outputFile, err)
-	}
-
-	// Merge overlapping blocks using existing logic
-	return mergeCoverageBlocksFile(outputFile)
-}
-
-func parseBlockID(blockID string) (file string, startLine, startCol, endLine, endCol int, err error) {
-	fileParts := strings.Split(blockID, ":")
-	if len(fileParts) != 2 {
-		return "", 0, 0, 0, 0, fmt.Errorf("invalid block ID format: %s", blockID)
-	}
-
-	file = fileParts[0]
-
-	rangeParts := strings.Split(fileParts[1], ",")
-	if len(rangeParts) != 2 {
-		return "", 0, 0, 0, 0, fmt.Errorf("invalid range format: %s", blockID)
-	}
-
-	startParts := strings.Split(rangeParts[0], ".")
-	if len(startParts) != 2 {
-		return "", 0, 0, 0, 0, fmt.Errorf("invalid start position: %s", blockID)
-	}
-
-	endParts := strings.Split(rangeParts[1], ".")
-	if len(endParts) != 2 {
-		return "", 0, 0, 0, 0, fmt.Errorf("invalid end position: %s", blockID)
-	}
-
-	startLine, _ = strconv.Atoi(startParts[0])
-	startCol, _ = strconv.Atoi(startParts[1])
-	endLine, _ = strconv.Atoi(endParts[0])
-	endCol, _ = strconv.Atoi(endParts[1])
-
-	return file, startLine, startCol, endLine, endCol, nil
-}
-
-
-func parseCoverageBlock(line string) (coverageBlock, error) {
-	// Format: file:startLine.startCol,endLine.endCol statements count
-	parts := strings.Fields(line)
-	if len(parts) != 3 {
-		return coverageBlock{}, fmt.Errorf("invalid line format")
-	}
-
-	blockID := parts[0]
-	statements, _ := strconv.Atoi(parts[1])
-	count, _ := strconv.Atoi(parts[2])
-
-	file, startLine, startCol, endLine, endCol, err := parseBlockID(blockID)
-	if err != nil {
-		return coverageBlock{}, err
-	}
-
-	return coverageBlock{
-		file:       file,
-		startLine:  startLine,
-		startCol:   startCol,
-		endLine:    endLine,
-		endCol:     endCol,
-		statements: statements,
-		count:      count,
-	}, nil
-}
 
 
