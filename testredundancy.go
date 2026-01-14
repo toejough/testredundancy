@@ -1,5 +1,5 @@
-// Package main provides the testredundancy CLI.
-package main
+// Package testredundancy finds redundant tests based on coverage analysis.
+package testredundancy
 
 import (
 	"context"
@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,81 +17,23 @@ import (
 	executil "github.com/toejough/testredundancy/internal/exec"
 )
 
-func main() {
-	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-}
-
-func run() error {
-	// Parse command line args
-	// Usage: testredundancy [--baseline pkg1,pkg2,...] [--threshold N] [--coverpkg pkgs] <package>
-	args := os.Args[1:]
-	
-	config := RedundancyConfig{
-		CoverageThreshold: 80.0,
-		PackageToAnalyze:  "./...",
-		CoveragePackages:  "./...",
-	}
-	
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--baseline":
-			if i+1 >= len(args) {
-				return fmt.Errorf("--baseline requires an argument")
-			}
-			i++
-			for _, pkg := range strings.Split(args[i], ",") {
-				pkg = strings.TrimSpace(pkg)
-				if pkg != "" {
-					config.BaselineTests = append(config.BaselineTests, BaselineTestSpec{Package: pkg})
-				}
-			}
-		case "--threshold":
-			if i+1 >= len(args) {
-				return fmt.Errorf("--threshold requires an argument")
-			}
-			i++
-			t, err := strconv.ParseFloat(args[i], 64)
-			if err != nil {
-				return fmt.Errorf("invalid threshold: %w", err)
-			}
-			config.CoverageThreshold = t
-		case "--coverpkg":
-			if i+1 >= len(args) {
-				return fmt.Errorf("--coverpkg requires an argument")
-			}
-			i++
-			config.CoveragePackages = args[i]
-		default:
-			if strings.HasPrefix(args[i], "-") {
-				return fmt.Errorf("unknown flag: %s", args[i])
-			}
-			config.PackageToAnalyze = args[i]
-		}
-	}
-	
-	return findRedundantTestsWithConfig(config)
-}
-
 // BaselineTestSpec specifies a baseline test for redundancy analysis.
 type BaselineTestSpec struct {
 	Package     string // Package path (e.g., "./impgen/run" or "./UAT/...")
 	TestPattern string // Test name pattern for -run flag (empty string runs all tests in package)
 }
 
-// RedundancyConfig configures the redundant test analysis.
-type RedundancyConfig struct {
+// Config configures the redundant test analysis.
+type Config struct {
 	BaselineTests     []BaselineTestSpec // Tests that form the baseline coverage
 	CoverageThreshold float64            // Percentage threshold (e.g., 80.0 for 80%)
 	PackageToAnalyze  string             // Package containing tests to analyze (e.g., "./impgen/run")
 	CoveragePackages  string             // Packages to measure coverage for (e.g., "./impgen/...,./imptest/...")
 }
 
-// findRedundantTestsWithConfig identifies unit tests that don't provide unique coverage beyond baseline tests.
+// Find identifies unit tests that don't provide unique coverage beyond baseline tests.
 // This generic version can be used in any repository by providing appropriate configuration.
-func findRedundantTestsWithConfig(config RedundancyConfig) error {
+func Find(config Config) error {
 	fmt.Println("Finding redundant tests...")
 	fmt.Println()
 
