@@ -16,7 +16,7 @@ type SelectionResult struct {
 
 // SelectMinimalSet uses a greedy algorithm to find the minimal set of tests
 // that maintain coverage above the threshold for all target functions.
-// Baseline tests are always included.
+// Baseline tests are preferred, then non-baseline tests are added greedily.
 func SelectMinimalSet(
 	allCoverage []TestCoverage,
 	baselineTests map[string]bool,
@@ -39,6 +39,12 @@ func SelectMinimalSet(
 		currentCoverage[fn] = 0
 	}
 
+	// Track which functions still need coverage (below threshold)
+	remainingGaps := make(map[string]bool)
+	for fn := range targetFunctions {
+		remainingGaps[fn] = true
+	}
+
 	// Track which tests are kept
 	keptTests := make(map[string]bool)
 	var keptOrder []string
@@ -59,8 +65,17 @@ func SelectMinimalSet(
 		}
 	}
 
-	// Count how many target functions this test improves
-	countImprovements := func(testName string) int {
+	// Update remaining gaps after adding a test
+	updateGaps := func() {
+		for fn := range remainingGaps {
+			if currentCoverage[fn] >= threshold {
+				delete(remainingGaps, fn)
+			}
+		}
+	}
+
+	// Count how many gaps (functions below threshold) this test helps fill
+	countGapImprovements := func(testName string) int {
 		cov, ok := coverageByTest[testName]
 		if !ok {
 			return 0
@@ -68,13 +83,9 @@ func SelectMinimalSet(
 
 		count := 0
 
-		for fn, newCov := range cov {
-			if _, isTarget := targetFunctions[fn]; !isTarget {
-				continue
-			}
-
-			// Count as improvement if it increases coverage
-			if newCov > currentCoverage[fn] {
+		for fn := range remainingGaps {
+			// Count as improvement if this test increases coverage for a gap
+			if newCov, hasCov := cov[fn]; hasCov && newCov > currentCoverage[fn] {
 				count++
 			}
 		}
@@ -82,33 +93,52 @@ func SelectMinimalSet(
 		return count
 	}
 
-	// Phase 1: Add baseline tests first (they're always kept)
+	// Separate baseline and non-baseline tests
+	var baselineTestList []TestCoverage
+	var nonBaselineTestList []TestCoverage
+
 	for _, tc := range allCoverage {
 		if baselineTests[tc.TestName] {
-			keptTests[tc.TestName] = true
-			keptOrder = append(keptOrder, tc.TestName)
-			mergeCoverage(tc.TestName)
+			baselineTestList = append(baselineTestList, tc)
+		} else {
+			nonBaselineTestList = append(nonBaselineTestList, tc)
 		}
 	}
 
-	// Phase 2: Greedily add tests that provide the most improvement
-	for {
+	// Keep adding tests until no gaps remain
+	for len(remainingGaps) > 0 {
 		var bestTest string
 		bestImprovements := 0
 
-		for _, tc := range allCoverage {
+		// First try baseline tests
+		for _, tc := range baselineTestList {
 			if keptTests[tc.TestName] {
 				continue
 			}
 
-			improvements := countImprovements(tc.TestName)
+			improvements := countGapImprovements(tc.TestName)
 			if improvements > bestImprovements {
 				bestImprovements = improvements
 				bestTest = tc.TestName
 			}
 		}
 
-		// No more improvements possible
+		// If no baseline test helps, try non-baseline tests
+		if bestImprovements == 0 {
+			for _, tc := range nonBaselineTestList {
+				if keptTests[tc.TestName] {
+					continue
+				}
+
+				improvements := countGapImprovements(tc.TestName)
+				if improvements > bestImprovements {
+					bestImprovements = improvements
+					bestTest = tc.TestName
+				}
+			}
+		}
+
+		// No test can fill any remaining gaps
 		if bestImprovements == 0 {
 			break
 		}
@@ -116,6 +146,7 @@ func SelectMinimalSet(
 		keptTests[bestTest] = true
 		keptOrder = append(keptOrder, bestTest)
 		mergeCoverage(bestTest)
+		updateGaps()
 	}
 
 	// Identify redundant tests
