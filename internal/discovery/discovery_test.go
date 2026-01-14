@@ -79,3 +79,34 @@ func TestTestInfo_QualifiedName(t *testing.T) {
 
 	expect.Expect(info.QualifiedName()).To(gomega.Equal("github.com/user/repo:TestFoo"))
 }
+
+func TestParseTestOutput_ExtractsTestNames(t *testing.T) {
+	t.Parallel()
+	expect := gomega.NewWithT(t)
+
+	output := `TestFoo
+TestBar
+ok  	github.com/user/repo	0.001s
+`
+	tests := discovery.ParseTestOutput("github.com/user/repo", output)
+
+	expect.Expect(tests).To(gomega.HaveLen(2))
+	expect.Expect(tests[0].Name).To(gomega.Equal("TestFoo"))
+	expect.Expect(tests[1].Name).To(gomega.Equal("TestBar"))
+	expect.Expect(tests[0].Pkg).To(gomega.Equal("github.com/user/repo"))
+}
+
+func TestParseTestOutput_IgnoresNonTestLines(t *testing.T) {
+	t.Parallel()
+	expect := gomega.NewWithT(t)
+
+	output := `TestFoo
+BenchmarkFoo
+ExampleFoo
+ok  	github.com/user/repo	0.001s
+`
+	tests := discovery.ParseTestOutput("github.com/user/repo", output)
+
+	expect.Expect(tests).To(gomega.HaveLen(1))
+	expect.Expect(tests[0].Name).To(gomega.Equal("TestFoo"))
+}
