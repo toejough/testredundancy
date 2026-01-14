@@ -163,3 +163,37 @@ func FilterQtpl(content string) (string, error) {
 
 	return strings.Join(filtered, "\n"), nil
 }
+
+// ParseFunctionCoverage parses the output of "go tool cover -func".
+// Returns a map of function name (with location) to coverage percentage.
+func ParseFunctionCoverage(output string) (map[string]float64, error) {
+	funcs := make(map[string]float64)
+	lines := strings.Split(output, "\n")
+
+	for _, line := range lines {
+		if line == "" || strings.HasPrefix(line, "total:") {
+			continue
+		}
+
+		// Format: file:line:  functionName  percentage%
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+
+		// Last field is percentage like "85.7%"
+		percentStr := fields[len(fields)-1]
+		percentStr = strings.TrimSuffix(percentStr, "%")
+
+		percent, err := strconv.ParseFloat(percentStr, 64)
+		if err != nil {
+			continue
+		}
+
+		// Function name with location (e.g., "file.go:123: funcName")
+		funcName := strings.Join(fields[0:len(fields)-1], " ")
+		funcs[funcName] = percent
+	}
+
+	return funcs, nil
+}
