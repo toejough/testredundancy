@@ -240,3 +240,60 @@ func TestParseFunctionCoverage_HandlesEmptyInput(t *testing.T) {
 	expect.Expect(err).NotTo(gomega.HaveOccurred())
 	expect.Expect(funcs).To(gomega.BeEmpty())
 }
+
+func TestMergeContents_CombinesMultipleFiles(t *testing.T) {
+	t.Parallel()
+	expect := gomega.NewWithT(t)
+
+	contents := []string{
+		"mode: set\nfile1.go:10.5,20.15 3 1\n",
+		"mode: set\nfile2.go:5.1,10.5 2 1\n",
+	}
+
+	result, err := coverage.MergeContents(contents)
+
+	expect.Expect(err).NotTo(gomega.HaveOccurred())
+	expect.Expect(result).To(gomega.ContainSubstring("file1.go"))
+	expect.Expect(result).To(gomega.ContainSubstring("file2.go"))
+	expect.Expect(result).To(gomega.HavePrefix("mode: set\n"))
+}
+
+func TestMergeContents_FiltersQtpl(t *testing.T) {
+	t.Parallel()
+	expect := gomega.NewWithT(t)
+
+	contents := []string{
+		"mode: set\nfile.go:10.5,20.15 3 1\ntemplate.qtpl:5.1,10.5 2 1\n",
+	}
+
+	result, err := coverage.MergeContents(contents)
+
+	expect.Expect(err).NotTo(gomega.HaveOccurred())
+	expect.Expect(result).NotTo(gomega.ContainSubstring(".qtpl"))
+}
+
+func TestMergeContents_MergesDuplicateBlocks(t *testing.T) {
+	t.Parallel()
+	expect := gomega.NewWithT(t)
+
+	contents := []string{
+		"mode: set\nfile.go:10.5,20.15 3 1\n",
+		"mode: set\nfile.go:10.5,20.15 3 2\n",
+	}
+
+	result, err := coverage.MergeContents(contents)
+
+	expect.Expect(err).NotTo(gomega.HaveOccurred())
+	// Should have merged the counts (1+2=3)
+	lines := strings.Split(strings.TrimSpace(result), "\n")
+	expect.Expect(lines).To(gomega.HaveLen(2)) // mode + 1 merged block
+}
+
+func TestMergeContents_ErrorsOnEmptyInput(t *testing.T) {
+	t.Parallel()
+	expect := gomega.NewWithT(t)
+
+	_, err := coverage.MergeContents(nil)
+
+	expect.Expect(err).To(gomega.HaveOccurred())
+}
