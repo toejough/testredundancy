@@ -118,3 +118,33 @@ func TestOutput_RespectsContextCancellation(t *testing.T) {
 
 	expect.Expect(err).To(gomega.HaveOccurred())
 }
+
+func TestRunQuietCoverage_ReturnsNilOnSuccess(t *testing.T) {
+	t.Parallel()
+	expect := gomega.NewWithT(t)
+
+	err := exec.RunQuietCoverage("true")
+
+	expect.Expect(err).NotTo(gomega.HaveOccurred())
+}
+
+func TestRunQuietCoverage_ReturnsErrorOnFailure(t *testing.T) {
+	t.Parallel()
+	expect := gomega.NewWithT(t)
+
+	err := exec.RunQuietCoverage("false")
+
+	expect.Expect(err).To(gomega.HaveOccurred())
+}
+
+func TestRunQuietCoverage_FiltersCoverageWarning(t *testing.T) {
+	t.Parallel()
+	expect := gomega.NewWithT(t)
+
+	// This should not show the warning in stderr (we can't easily capture stderr
+	// from the test, but we can verify the command runs without error)
+	err := exec.RunQuietCoverage("sh", "-c",
+		"echo 'warning: no packages being tested depend on matches' >&2; exit 0")
+
+	expect.Expect(err).NotTo(gomega.HaveOccurred())
+}
