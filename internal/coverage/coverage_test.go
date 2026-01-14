@@ -198,3 +198,45 @@ func TestFilterQtpl_HandlesEmptyInput(t *testing.T) {
 
 	expect.Expect(err).To(gomega.HaveOccurred())
 }
+
+func TestParseFunctionCoverage_ValidOutput(t *testing.T) {
+	t.Parallel()
+	expect := gomega.NewWithT(t)
+
+	// Sample output from go tool cover -func
+	input := `github.com/user/repo/file.go:10:	FuncA		85.7%
+github.com/user/repo/file.go:25:	FuncB		100.0%
+github.com/user/repo/other.go:5:	FuncC		0.0%
+total:							(statements)	62.5%
+`
+	funcs, err := coverage.ParseFunctionCoverage(input)
+
+	expect.Expect(err).NotTo(gomega.HaveOccurred())
+	expect.Expect(funcs).To(gomega.HaveLen(3))
+	expect.Expect(funcs["github.com/user/repo/file.go:10: FuncA"]).To(gomega.BeNumerically("~", 85.7, 0.01))
+	expect.Expect(funcs["github.com/user/repo/file.go:25: FuncB"]).To(gomega.BeNumerically("~", 100.0, 0.01))
+	expect.Expect(funcs["github.com/user/repo/other.go:5: FuncC"]).To(gomega.BeNumerically("~", 0.0, 0.01))
+}
+
+func TestParseFunctionCoverage_SkipsTotalLine(t *testing.T) {
+	t.Parallel()
+	expect := gomega.NewWithT(t)
+
+	input := `github.com/user/repo/file.go:10:	FuncA		85.7%
+total:							(statements)	62.5%
+`
+	funcs, err := coverage.ParseFunctionCoverage(input)
+
+	expect.Expect(err).NotTo(gomega.HaveOccurred())
+	expect.Expect(funcs).To(gomega.HaveLen(1))
+}
+
+func TestParseFunctionCoverage_HandlesEmptyInput(t *testing.T) {
+	t.Parallel()
+	expect := gomega.NewWithT(t)
+
+	funcs, err := coverage.ParseFunctionCoverage("")
+
+	expect.Expect(err).NotTo(gomega.HaveOccurred())
+	expect.Expect(funcs).To(gomega.BeEmpty())
+}
