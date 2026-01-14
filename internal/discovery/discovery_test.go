@@ -1,10 +1,12 @@
-package main
+package discovery_test
 
 import (
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"testing"
+
+	"github.com/toejough/testredundancy/internal/discovery"
 )
 
 func TestHasParallelCall(t *testing.T) {
@@ -71,19 +73,19 @@ func TestHasParallelCall(t *testing.T) {
 				t.Fatal("no function body found")
 			}
 
-			got := hasParallelCall(body)
+			got := discovery.HasParallelCall(body)
 			if got != tt.want {
-				t.Errorf("hasParallelCall() = %v, want %v", got, tt.want)
+				t.Errorf("HasParallelCall() = %v, want %v", got, tt.want)
 			}
 		})
 	}
 }
 
 func TestTestInfoQualifiedName(t *testing.T) {
-	info := testInfo{pkg: "github.com/foo/bar", name: "TestSomething"}
-	got := info.qualifiedName()
+	info := discovery.TestInfo{Pkg: "github.com/foo/bar", Name: "TestSomething"}
+	got := info.QualifiedName()
 	want := "github.com/foo/bar:TestSomething"
 	if got != want {
-		t.Errorf("qualifiedName() = %q, want %q", got, want)
+		t.Errorf("QualifiedName() = %q, want %q", got, want)
 	}
 }

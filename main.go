@@ -4,9 +4,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -17,6 +14,7 @@ import (
 	"sync/atomic"
 
 	"github.com/toejough/testredundancy/internal/coverage"
+	"github.com/toejough/testredundancy/internal/discovery"
 	executil "github.com/toejough/testredundancy/internal/exec"
 )
 
@@ -92,93 +90,6 @@ type RedundancyConfig struct {
 	CoveragePackages  string             // Packages to measure coverage for (e.g., "./impgen/...,./imptest/...")
 }
 
-type testInfo struct {
-	pkg  string
-	name string
-}
-
-// qualifiedName returns the package-qualified test name (pkg:TestName).
-func (t testInfo) qualifiedName() string {
-	return t.pkg + ":" + t.name
-}
-
-// detectParallelTests detects which tests are marked with t.Parallel().
-// Returns a map of qualified test names (pkg:TestName) that are parallel-safe.
-func detectParallelTests(tests []testInfo) map[string]bool {
-	result := make(map[string]bool)
-
-	// Group tests by package
-	testsByPkg := make(map[string][]testInfo)
-	for _, t := range tests {
-		testsByPkg[t.pkg] = append(testsByPkg[t.pkg], t)
-	}
-
-	for pkg, pkgTests := range testsByPkg {
-		// Get the directory for this package
-		pkgDir, err := executil.Output(context.Background(), "go", "list", "-f", "{{.Dir}}", pkg)
-		if err != nil {
-			continue
-		}
-
-		pkgDir = strings.TrimSpace(pkgDir)
-
-		// Find test files in this package
-		testFiles, err := filepath.Glob(filepath.Join(pkgDir, "*_test.go"))
-		if err != nil {
-			continue
-		}
-
-		// Parse each test file and check for t.Parallel() calls
-		fset := token.NewFileSet()
-
-		for _, testFile := range testFiles {
-			f, err := parser.ParseFile(fset, testFile, nil, parser.ParseComments)
-			if err != nil {
-				continue
-			}
-
-			// Find all test functions and check if they call t.Parallel()
-			ast.Inspect(f, func(n ast.Node) bool {
-				fn, ok := n.(*ast.FuncDecl)
-				if !ok || fn.Name == nil {
-					return true
-				}
-
-				// Only consider Test* functions with *testing.T parameter
-				if !strings.HasPrefix(fn.Name.Name, "Test") {
-					return true
-				}
-
-				// Check if this function is one we care about
-				qualifiedName := pkg + ":" + fn.Name.Name
-				isRelevant := false
-
-				for _, t := range pkgTests {
-					if t.qualifiedName() == qualifiedName {
-						isRelevant = true
-
-						break
-					}
-				}
-
-				if !isRelevant {
-					return true
-				}
-
-				// Check if function body contains t.Parallel() call
-				if fn.Body != nil && hasParallelCall(fn.Body) {
-					result[qualifiedName] = true
-				}
-
-				return true
-			})
-		}
-	}
-
-	return result
-}
-
-
 // findRedundantTestsWithConfig identifies unit tests that don't provide unique coverage beyond baseline tests.
 // This generic version can be used in any repository by providing appropriate configuration.
 func findRedundantTestsWithConfig(config RedundancyConfig) error {
@@ -206,12 +117,12 @@ func findRedundantTestsWithConfig(config RedundancyConfig) error {
 			baselineTestSet[strings.TrimSpace(fullPkg)+":"+spec.TestPattern] = true
 		} else {
 			// List all test functions in package
-			pkgTests, err := listTestFunctionsWithPackages(spec.Package)
+			pkgTests, err := discovery.ListTests(spec.Package)
 			if err != nil {
 				fmt.Printf("  Warning: couldn't list tests in %s: %v\n", spec.Package, err)
 			} else {
 				for _, t := range pkgTests {
-					baselineTestSet[t.qualifiedName()] = true
+					baselineTestSet[t.QualifiedName()] = true
 				}
 			}
 		}
@@ -222,17 +133,17 @@ func findRedundantTestsWithConfig(config RedundancyConfig) error {
 	// Step 2: List all tests
 	fmt.Println("\nStep 2: Listing all tests...")
 
-	allTests, err := listTestFunctionsWithPackages(config.PackageToAnalyze)
+	allTests, err := discovery.ListTests(config.PackageToAnalyze)
 	if err != nil {
 		return fmt.Errorf("failed to list tests: %w", err)
 	}
 
 	// Separate into baseline and non-baseline
-	var baselineTests []testInfo
-	var nonBaselineTests []testInfo
+	var baselineTests []discovery.TestInfo
+	var nonBaselineTests []discovery.TestInfo
 
 	for _, t := range allTests {
-		if baselineTestSet[t.qualifiedName()] {
+		if baselineTestSet[t.QualifiedName()] {
 			baselineTests = append(baselineTests, t)
 		} else {
 			nonBaselineTests = append(nonBaselineTests, t)
@@ -251,20 +162,20 @@ func findRedundantTestsWithConfig(config RedundancyConfig) error {
 	// Detect which tests are marked with t.Parallel()
 	fmt.Println("  Detecting parallel-safe tests...")
 
-	parallelTests := detectParallelTests(allTestsToRun)
+	parallelTests := discovery.DetectParallelTests(allTestsToRun)
 	fmt.Printf("  Found %d parallel-safe tests, %d serial tests\n",
 		len(parallelTests), len(allTestsToRun)-len(parallelTests))
 
 	testCoverageFiles := make(map[string]string)
-	var allTestOrder []testInfo
+	var allTestOrder []discovery.TestInfo
 
 	// Helper to run a single test and collect coverage
-	runSingleTest := func(test testInfo) bool {
-		coverFile := fmt.Sprintf("cov_%s_%s.out", executil.Sanitize(filepath.Base(test.pkg)), test.name)
+	runSingleTest := func(test discovery.TestInfo) bool {
+		coverFile := fmt.Sprintf("cov_%s_%s.out", executil.Sanitize(filepath.Base(test.Pkg)), test.Name)
 		coverFileRaw := coverFile + ".raw"
 
 		testErr := executil.RunQuietCoverage("go", "test", "-count=1", "-coverprofile="+coverFileRaw, "-coverpkg="+coverpkg,
-			"-run", "^"+test.name+"$", test.pkg)
+			"-run", "^"+test.Name+"$", test.Pkg)
 
 		if testErr != nil {
 			return false
@@ -278,18 +189,18 @@ func findRedundantTestsWithConfig(config RedundancyConfig) error {
 		}
 
 		os.Remove(coverFileRaw)
-		testCoverageFiles[test.qualifiedName()] = coverFile
+		testCoverageFiles[test.QualifiedName()] = coverFile
 		allTestOrder = append(allTestOrder, test)
 
 		return true
 	}
 
 	// Separate tests into parallel-safe and serial
-	var serialTests []testInfo
-	var parallelSafeTests []testInfo
+	var serialTests []discovery.TestInfo
+	var parallelSafeTests []discovery.TestInfo
 
 	for _, test := range allTestsToRun {
-		if parallelTests[test.qualifiedName()] {
+		if parallelTests[test.QualifiedName()] {
 			parallelSafeTests = append(parallelSafeTests, test)
 		} else {
 			serialTests = append(serialTests, test)
@@ -301,7 +212,7 @@ func findRedundantTestsWithConfig(config RedundancyConfig) error {
 		fmt.Printf("  Running %d serial tests sequentially...\n", len(serialTests))
 
 		for i, test := range serialTests {
-			fmt.Printf("    [%d/%d] %s... ", i+1, len(serialTests), test.qualifiedName())
+			fmt.Printf("    [%d/%d] %s... ", i+1, len(serialTests), test.QualifiedName())
 
 			if runSingleTest(test) {
 				fmt.Printf("OK\n")
@@ -326,29 +237,29 @@ func findRedundantTestsWithConfig(config RedundancyConfig) error {
 		for _, test := range parallelSafeTests {
 			wg.Add(1)
 
-			go func(test testInfo) {
+			go func(test discovery.TestInfo) {
 				defer wg.Done()
 
 				sem <- struct{}{}
 				defer func() { <-sem }()
 
-				coverFile := fmt.Sprintf("cov_%s_%s.out", executil.Sanitize(filepath.Base(test.pkg)), test.name)
+				coverFile := fmt.Sprintf("cov_%s_%s.out", executil.Sanitize(filepath.Base(test.Pkg)), test.Name)
 				coverFileRaw := coverFile + ".raw"
 
 				testErr := executil.RunQuietCoverage("go", "test", "-count=1", "-coverprofile="+coverFileRaw, "-coverpkg="+coverpkg,
-					"-run", "^"+test.name+"$", test.pkg)
+					"-run", "^"+test.Name+"$", test.Pkg)
 
 				current := atomic.AddInt32(&completed, 1)
 
 				if testErr != nil {
-					fmt.Printf("    [%d/%d] %s... FAILED\n", current, len(parallelSafeTests), test.qualifiedName())
+					fmt.Printf("    [%d/%d] %s... FAILED\n", current, len(parallelSafeTests), test.QualifiedName())
 
 					return
 				}
 
 				err := coverage.FilterQtpl(coverFileRaw, coverFile)
 				if err != nil {
-					fmt.Printf("    [%d/%d] %s... FAILED (filter)\n", current, len(parallelSafeTests), test.qualifiedName())
+					fmt.Printf("    [%d/%d] %s... FAILED (filter)\n", current, len(parallelSafeTests), test.QualifiedName())
 					os.Remove(coverFileRaw)
 
 					return
@@ -357,14 +268,14 @@ func findRedundantTestsWithConfig(config RedundancyConfig) error {
 				os.Remove(coverFileRaw)
 
 				testCoverageFilesMu.Lock()
-				testCoverageFiles[test.qualifiedName()] = coverFile
+				testCoverageFiles[test.QualifiedName()] = coverFile
 				testCoverageFilesMu.Unlock()
 
 				allTestOrderMu.Lock()
 				allTestOrder = append(allTestOrder, test)
 				allTestOrderMu.Unlock()
 
-				fmt.Printf("    [%d/%d] %s... OK\n", current, len(parallelSafeTests), test.qualifiedName())
+				fmt.Printf("    [%d/%d] %s... OK\n", current, len(parallelSafeTests), test.QualifiedName())
 			}(test)
 		}
 
@@ -442,8 +353,8 @@ func findRedundantTestsWithConfig(config RedundancyConfig) error {
 
 	// Helper to evaluate a single test candidate
 	// Returns list of functions where this test improves coverage (for functions still below threshold)
-	evalCandidate := func(test testInfo, mergedSoFar string, gaps map[string]bool, currCov map[string]float64) []string {
-		qName := test.qualifiedName()
+	evalCandidate := func(test discovery.TestInfo, mergedSoFar string, gaps map[string]bool, currCov map[string]float64) []string {
+		qName := test.QualifiedName()
 		coverFile := testCoverageFiles[qName]
 
 		if coverFile == "" {
@@ -493,18 +404,18 @@ func findRedundantTestsWithConfig(config RedundancyConfig) error {
 	}
 
 	// Helper to find best test from a pool (parallelized)
-	findBestTest := func(pool []testInfo) (testInfo, []string) {
+	findBestTest := func(pool []discovery.TestInfo) (discovery.TestInfo, []string) {
 		// Filter out already-kept tests
-		var candidates []testInfo
+		var candidates []discovery.TestInfo
 
 		for _, test := range pool {
-			if !keptTestSet[test.qualifiedName()] {
+			if !keptTestSet[test.QualifiedName()] {
 				candidates = append(candidates, test)
 			}
 		}
 
 		if len(candidates) == 0 {
-			return testInfo{}, nil
+			return discovery.TestInfo{}, nil
 		}
 
 		// Copy current state for parallel evaluation
@@ -520,7 +431,7 @@ func findRedundantTestsWithConfig(config RedundancyConfig) error {
 
 		// Evaluate candidates in parallel
 		type result struct {
-			test         testInfo
+			test         discovery.TestInfo
 			improvements []string
 		}
 
@@ -532,7 +443,7 @@ func findRedundantTestsWithConfig(config RedundancyConfig) error {
 		for i, test := range candidates {
 			wg.Add(1)
 
-			go func(idx int, t testInfo) {
+			go func(idx int, t discovery.TestInfo) {
 				defer wg.Done()
 				sem <- struct{}{}
 				defer func() { <-sem }()
@@ -545,7 +456,7 @@ func findRedundantTestsWithConfig(config RedundancyConfig) error {
 		wg.Wait()
 
 		// Find best result (most improvements)
-		var bestTest testInfo
+		var bestTest discovery.TestInfo
 		var bestImprovements []string
 
 		for _, r := range results {
@@ -576,7 +487,7 @@ func findRedundantTestsWithConfig(config RedundancyConfig) error {
 		}
 
 		// Add the best test
-		qName := bestTest.qualifiedName()
+		qName := bestTest.QualifiedName()
 		marker := ""
 		if isBaseline {
 			marker = " (baseline)"
@@ -585,8 +496,8 @@ func findRedundantTestsWithConfig(config RedundancyConfig) error {
 		fmt.Printf("  %-80s %6d   KEEP%s\n", qName, len(bestGapsFilled), marker)
 
 		keptTests = append(keptTests, testResult{
-			name:       bestTest.name,
-			pkg:        bestTest.pkg,
+			name:       bestTest.Name,
+			pkg:        bestTest.Pkg,
 			isBaseline: isBaseline,
 			gapsFilled: len(bestGapsFilled),
 		})
@@ -636,7 +547,7 @@ func findRedundantTestsWithConfig(config RedundancyConfig) error {
 	var redundantNonBaselineTests []testResult
 
 	for _, test := range allTestOrder {
-		qName := test.qualifiedName()
+		qName := test.QualifiedName()
 		if !keptTestSet[qName] {
 			isBaseline := baselineTestSet[qName]
 			marker := ""
@@ -647,8 +558,8 @@ func findRedundantTestsWithConfig(config RedundancyConfig) error {
 			fmt.Printf("  %-80s %6d   REDUNDANT%s\n", qName, 0, marker)
 
 			result := testResult{
-				name:       test.name,
-				pkg:        test.pkg,
+				name:       test.Name,
+				pkg:        test.Pkg,
 				isBaseline: isBaseline,
 			}
 
@@ -793,75 +704,6 @@ func findRedundantTestsWithConfig(config RedundancyConfig) error {
 	return nil
 }
 
-// hasParallelCall checks if a block statement contains a call to t.Parallel().
-func hasParallelCall(body *ast.BlockStmt) bool {
-	found := false
-
-	ast.Inspect(body, func(n ast.Node) bool {
-		if found {
-			return false
-		}
-
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-
-		// Check for selector expression (t.Parallel or something.Parallel)
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok {
-			return true
-		}
-
-		// Check if the method is "Parallel"
-		if sel.Sel.Name == "Parallel" {
-			found = true
-
-			return false
-		}
-
-		return true
-	})
-
-	return found
-}
-
-// hasRelevantChanges returns true if the changeset contains files we care about.
-
-// listTestFunctionsWithPackages lists all test functions with their packages.
-func listTestFunctionsWithPackages(pkgPattern string) ([]testInfo, error) {
-	// First, expand the package pattern to get actual packages
-	listOut, err := executil.Output(context.Background(), "go", "list", pkgPattern)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list packages: %w", err)
-	}
-
-	var allTests []testInfo
-	packages := strings.Split(strings.TrimSpace(listOut), "\n")
-
-	for _, pkg := range packages {
-		if pkg == "" {
-			continue
-		}
-
-		out, err := executil.Output(context.Background(), "go", "test", "-list", ".", pkg)
-		if err != nil {
-			// Package may have no tests, skip it
-			continue
-		}
-
-		lines := strings.Split(out, "\n")
-
-		for _, line := range lines {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "Test") {
-				allTests = append(allTests, testInfo{pkg: pkg, name: line})
-			}
-		}
-	}
-
-	return allTests, nil
-}
 
 
 
