@@ -83,3 +83,57 @@ func FormatBlock(b Block) string {
 	return fmt.Sprintf("%s:%d.%d,%d.%d %d %d",
 		b.File, b.StartLine, b.StartCol, b.EndLine, b.EndCol, b.Statements, b.Count)
 }
+
+// MergeBlocks merges duplicate coverage blocks by summing their counts.
+// Input is the content of a coverage file, output is the merged content.
+func MergeBlocks(content string) (string, error) {
+	if content == "" {
+		return "", nil
+	}
+
+	lines := strings.Split(content, "\n")
+	if len(lines) == 0 {
+		return "", nil
+	}
+
+	// First line is mode
+	modeLine := lines[0]
+
+	// Merge blocks by key (file:start,end statements)
+	blocks := make(map[string]Block)
+
+	for _, line := range lines[1:] {
+		if line == "" {
+			continue
+		}
+
+		block, err := ParseBlock(line)
+		if err != nil {
+			continue
+		}
+
+		key := fmt.Sprintf("%s:%d.%d,%d.%d %d",
+			block.File, block.StartLine, block.StartCol,
+			block.EndLine, block.EndCol, block.Statements)
+
+		if existing, ok := blocks[key]; ok {
+			existing.Count += block.Count
+			blocks[key] = existing
+		} else {
+			blocks[key] = block
+		}
+	}
+
+	// Write merged blocks
+	var result strings.Builder
+
+	result.WriteString(modeLine)
+	result.WriteString("\n")
+
+	for _, block := range blocks {
+		result.WriteString(FormatBlock(block))
+		result.WriteString("\n")
+	}
+
+	return result.String(), nil
+}
