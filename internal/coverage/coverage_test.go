@@ -1,6 +1,7 @@
 package coverage_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/onsi/gomega"
@@ -106,4 +107,55 @@ func TestParseBlock_RoundTrip(t *testing.T) {
 		expect.Expect(block.Statements).To(gomega.Equal(statements))
 		expect.Expect(block.Count).To(gomega.Equal(count))
 	})
+}
+
+func TestMergeBlocks_SumsDuplicateCounts(t *testing.T) {
+	t.Parallel()
+	expect := gomega.NewWithT(t)
+
+	input := `mode: set
+file.go:10.5,20.15 3 1
+file.go:10.5,20.15 3 2
+file.go:30.1,40.10 5 1
+`
+	result, err := coverage.MergeBlocks(input)
+
+	expect.Expect(err).NotTo(gomega.HaveOccurred())
+	// Should have mode line + 2 unique blocks
+	lines := strings.Split(strings.TrimSpace(result), "\n")
+	expect.Expect(lines).To(gomega.HaveLen(3))
+	expect.Expect(lines[0]).To(gomega.Equal("mode: set"))
+
+	// Find the merged block - count should be 3 (1+2)
+	var foundMerged bool
+	for _, line := range lines[1:] {
+		if strings.HasPrefix(line, "file.go:10.5,20.15") {
+			expect.Expect(line).To(gomega.HaveSuffix(" 3")) // count = 3
+			foundMerged = true
+		}
+	}
+	expect.Expect(foundMerged).To(gomega.BeTrue())
+}
+
+func TestMergeBlocks_PreservesModeLine(t *testing.T) {
+	t.Parallel()
+	expect := gomega.NewWithT(t)
+
+	input := `mode: atomic
+file.go:10.5,20.15 3 1
+`
+	result, err := coverage.MergeBlocks(input)
+
+	expect.Expect(err).NotTo(gomega.HaveOccurred())
+	expect.Expect(result).To(gomega.HavePrefix("mode: atomic\n"))
+}
+
+func TestMergeBlocks_HandlesEmptyInput(t *testing.T) {
+	t.Parallel()
+	expect := gomega.NewWithT(t)
+
+	result, err := coverage.MergeBlocks("")
+
+	expect.Expect(err).NotTo(gomega.HaveOccurred())
+	expect.Expect(result).To(gomega.BeEmpty())
 }
