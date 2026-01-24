@@ -241,8 +241,16 @@ func Find(config Config) error {
 		wg.Wait()
 	}
 
-	// Step 4: Parse coverage files into memory and compute total function coverage
-	fmt.Println("\nStep 4: Parsing coverage files and computing function coverage...")
+	// Step 4: Parse coverage files into memory and build function map
+	fmt.Println("\nStep 4: Parsing coverage files and building function map...")
+
+	// Build function map from source (AST parsing)
+	funcMap, err := coverage.BuildFunctionMap(".")
+	if err != nil {
+		return fmt.Errorf("failed to build function map: %w", err)
+	}
+
+	fmt.Printf("  Built function map with %d files\n", len(funcMap))
 
 	// Parse all coverage files into BlockSets (in-memory)
 	testBlockSets := make(map[string]*coverage.BlockSet)
@@ -290,10 +298,10 @@ func Find(config Config) error {
 
 	fmt.Printf("  Target: %d functions at %.0f%%+ (with all tests)\n", len(targetFuncs), config.CoverageThreshold)
 
-	// Step 5: Greedy addition using block-level coverage (in-memory)
-	// This properly handles the additive nature of coverage
+	// Step 5: Greedy addition using function-level coverage (in-memory)
+	// Selects tests that improve the most functions toward threshold
 	fmt.Println("\nStep 5: Building minimal test set from zero (preferring baseline tests)...")
-	fmt.Printf("  %-80s %6s   %s\n", "TEST", "NEW", "DECISION")
+	fmt.Printf("  %-80s %6s   %s\n", "TEST", "FUNCS", "DECISION")
 	fmt.Printf("  %-80s %6s   %s\n", strings.Repeat("-", 80), "------", "--------")
 
 	type testResult struct {
@@ -310,10 +318,27 @@ func Find(config Config) error {
 	// Track current merged coverage (starts empty)
 	currentCoverage := &coverage.BlockSet{Blocks: make(map[string]coverage.BlockInfo)}
 
-	// Helper to find best test from a pool (in-memory, no I/O)
-	findBestTest := func(pool []discovery.TestInfo) (discovery.TestInfo, int) {
+	// Helper to count functions that would improve toward threshold
+	countFunctionImprovements := func(currentFuncCov, mergedFuncCov map[string]float64) int {
+		improvements := 0
+		for fn, mergedCov := range mergedFuncCov {
+			currentCov := currentFuncCov[fn]
+			// Count if function improved toward threshold (below -> at/above, or any improvement if already above)
+			if currentCov < config.CoverageThreshold && mergedCov >= config.CoverageThreshold {
+				improvements++
+			} else if mergedCov > currentCov && currentCov < config.CoverageThreshold {
+				// Partial improvement toward threshold still counts (function got closer)
+				// But we weight reaching threshold more heavily
+				improvements++
+			}
+		}
+		return improvements
+	}
+
+	// Helper to find best test from a pool (in-memory, function-based counting)
+	findBestTest := func(pool []discovery.TestInfo, currentFuncCov map[string]float64) (discovery.TestInfo, int) {
 		var bestTest discovery.TestInfo
-		bestNewStatements := 0
+		bestImprovements := 0
 
 		for _, test := range pool {
 			qName := test.QualifiedName()
@@ -326,30 +351,40 @@ func Find(config Config) error {
 				continue
 			}
 
-			// Count new statements this test would contribute
-			newStatements := currentCoverage.CountNewStatements(testBS)
-			if newStatements > bestNewStatements {
-				bestNewStatements = newStatements
+			// Merge test coverage with current coverage (hypothetically)
+			merged := currentCoverage.Clone()
+			merged.Merge(testBS)
+
+			// Compute function coverage for merged
+			mergedFuncCov := funcMap.ComputeFunctionCoverage(merged)
+
+			// Count function improvements
+			improvements := countFunctionImprovements(currentFuncCov, mergedFuncCov)
+			if improvements > bestImprovements {
+				bestImprovements = improvements
 				bestTest = test
 			}
 		}
 
-		return bestTest, bestNewStatements
+		return bestTest, bestImprovements
 	}
 
 	// Keep adding tests until coverage stops improving
+	// Compute initial function coverage (empty)
+	currentFuncCov := funcMap.ComputeFunctionCoverage(currentCoverage)
+
 	for {
 		// First try baseline tests
-		bestTest, newStatements := findBestTest(baselineTests)
+		bestTest, improvements := findBestTest(baselineTests, currentFuncCov)
 		isBaseline := true
 
 		// If no baseline test adds coverage, try non-baseline tests
-		if newStatements == 0 {
-			bestTest, newStatements = findBestTest(nonBaselineTests)
+		if improvements == 0 {
+			bestTest, improvements = findBestTest(nonBaselineTests, currentFuncCov)
 			isBaseline = false
 		}
 
-		if newStatements == 0 {
+		if improvements == 0 {
 			// No test can add any new coverage
 			break
 		}
@@ -361,19 +396,20 @@ func Find(config Config) error {
 			marker = " (baseline)"
 		}
 
-		fmt.Printf("  %-80s %6d   KEEP%s\n", qName, newStatements, marker)
+		fmt.Printf("  %-80s %6d   KEEP%s\n", qName, improvements, marker)
 
 		keptTests = append(keptTests, testResult{
 			name:       bestTest.Name,
 			pkg:        bestTest.Pkg,
 			isBaseline: isBaseline,
-			gapsFilled: newStatements,
+			gapsFilled: improvements,
 		})
 		keptTestSet[qName] = true
 		keptTestFiles = append(keptTestFiles, testCoverageFiles[qName])
 
-		// Merge this test's coverage into current
+		// Merge this test's coverage into current and update function coverage
 		currentCoverage.Merge(testBlockSets[qName])
+		currentFuncCov = funcMap.ComputeFunctionCoverage(currentCoverage)
 	}
 
 	// Mark remaining tests as redundant
