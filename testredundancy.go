@@ -45,7 +45,8 @@ func Find(config Config) error {
 
 	// Step 1: Identify baseline tests (preferred tests)
 	fmt.Println("Step 1: Identifying baseline tests...")
-	baselineTestSet := make(map[string]bool) // key: "pkg:TestName"
+	baselineTestSet := make(map[string]bool)    // key: "pkg:TestName" for exact matches
+	baselinePatterns := make(map[string]string) // key: "pkg" -> pattern prefix
 
 	for _, spec := range config.BaselineTests {
 		if spec.TestPattern != "" {
@@ -55,7 +56,9 @@ func Find(config Config) error {
 				return fmt.Errorf("failed to resolve package %s: %w", spec.Package, err)
 			}
 
-			baselineTestSet[strings.TrimSpace(fullPkg)+":"+spec.TestPattern] = true
+			fullPkg = strings.TrimSpace(fullPkg)
+			// Store pattern for prefix matching
+			baselinePatterns[fullPkg] = spec.TestPattern
 		} else {
 			// List all test functions in package
 			pkgTests, err := discovery.ListTests(spec.Package)
@@ -69,7 +72,7 @@ func Find(config Config) error {
 		}
 	}
 
-	fmt.Printf("  Identified %d baseline tests\n", len(baselineTestSet))
+	fmt.Printf("  Identified %d baseline test patterns, %d exact baseline tests\n", len(baselinePatterns), len(baselineTestSet))
 
 	// Step 2: List all tests
 	fmt.Println("\nStep 2: Listing all tests...")
@@ -83,8 +86,23 @@ func Find(config Config) error {
 	var baselineTests []discovery.TestInfo
 	var nonBaselineTests []discovery.TestInfo
 
-	for _, t := range allTests {
+	// Helper to check if a test matches baseline criteria
+	isBaseline := func(t discovery.TestInfo) bool {
+		// Check exact match
 		if baselineTestSet[t.QualifiedName()] {
+			return true
+		}
+		// Check pattern prefix match
+		if pattern, ok := baselinePatterns[t.Pkg]; ok {
+			if strings.HasPrefix(t.Name, pattern) {
+				return true
+			}
+		}
+		return false
+	}
+
+	for _, t := range allTests {
+		if isBaseline(t) {
 			baselineTests = append(baselineTests, t)
 		} else {
 			nonBaselineTests = append(nonBaselineTests, t)
@@ -223,46 +241,40 @@ func Find(config Config) error {
 		wg.Wait()
 	}
 
-	// Step 4: Compute target coverage (all tests merged)
-	fmt.Println("\nStep 4: Computing target coverage with all tests...")
+	// Step 4: Parse all coverage files into memory (one-time cost)
+	fmt.Println("\nStep 4: Parsing coverage files into memory...")
 
-	var allCoverageFiles []string
-	for _, f := range testCoverageFiles {
-		allCoverageFiles = append(allCoverageFiles, f)
+	testBlockSets := make(map[string]*coverage.BlockSet)
+
+	for qName, coverFile := range testCoverageFiles {
+		bs, err := coverage.ParseFileToBlockSet(coverFile)
+		if err != nil {
+			fmt.Printf("  Warning: failed to parse %s: %v\n", coverFile, err)
+			continue
+		}
+		testBlockSets[qName] = bs
 	}
 
-	if len(allCoverageFiles) == 0 {
+	if len(testBlockSets) == 0 {
 		return fmt.Errorf("no tests ran successfully")
 	}
 
-	totalCoverageFile := "total_coverage.out"
+	fmt.Printf("  Parsed %d coverage files into memory\n", len(testBlockSets))
 
-	err = coverage.MergeFiles(allCoverageFiles, totalCoverageFile)
-	if err != nil {
-		return fmt.Errorf("failed to merge total coverage: %w", err)
+	// Compute total coverage by merging all
+	totalCoverage := &coverage.BlockSet{Blocks: make(map[string]coverage.BlockInfo)}
+	for _, bs := range testBlockSets {
+		totalCoverage.Merge(bs)
 	}
 
-	targetCoverage, err := coverage.GetAllFunctionsCoverage(totalCoverageFile)
-	if err != nil {
-		return fmt.Errorf("failed to analyze target coverage: %w", err)
-	}
+	fmt.Printf("  Total coverage: %.1f%% (%d/%d statements)\n",
+		totalCoverage.CoveragePercent(),
+		totalCoverage.CoveredStatements(),
+		totalCoverage.TotalStatements())
 
-	// Build target set: functions that reach threshold with all tests
-	targetFuncs := make(map[string]bool)
-
-	for fn, cov := range targetCoverage {
-		if cov >= config.CoverageThreshold {
-			targetFuncs[fn] = true
-		}
-	}
-
-	fmt.Printf("  Target: %d functions at %.0f%%+ (with all tests)\n", len(targetFuncs), config.CoverageThreshold)
-
-	os.Remove(totalCoverageFile)
-
-	// Step 5: Greedy addition starting from 0 coverage
+	// Step 5: Greedy addition starting from 0 coverage (in-memory)
 	fmt.Println("\nStep 5: Building minimal test set from zero (preferring baseline tests)...")
-	fmt.Printf("  %-80s %6s   %s\n", "TEST", "FILLS", "DECISION")
+	fmt.Printf("  %-80s %6s   %s\n", "TEST", "NEW", "DECISION")
 	fmt.Printf("  %-80s %6s   %s\n", strings.Repeat("-", 80), "------", "--------")
 
 	type testResult struct {
@@ -274,156 +286,52 @@ func Find(config Config) error {
 
 	var keptTests []testResult
 	keptTestFiles := []string{}
-
-	// Track current coverage level for each target function (starts at 0)
-	currentCoverage := make(map[string]float64)
-	for fn := range targetFuncs {
-		currentCoverage[fn] = 0
-	}
-
-	// Track which functions still need coverage (below threshold)
-	remainingGaps := make(map[string]bool)
-	for fn := range targetFuncs {
-		remainingGaps[fn] = true
-	}
-
 	keptTestSet := make(map[string]bool)
 
-	// Maintain a running "merged so far" file to avoid re-merging all kept files each time
-	currentMergedFile := ""
+	// Track current merged coverage (starts empty)
+	currentCoverage := &coverage.BlockSet{Blocks: make(map[string]coverage.BlockInfo)}
 
-	// Helper to evaluate a single test candidate
-	// Returns list of functions where this test improves coverage (for functions still below threshold)
-	evalCandidate := func(test discovery.TestInfo, mergedSoFar string, gaps map[string]bool, currCov map[string]float64) []string {
-		qName := test.QualifiedName()
-		coverFile := testCoverageFiles[qName]
-
-		if coverFile == "" {
-			return nil
-		}
-
-		var improvements []string
-
-		if mergedSoFar == "" {
-			// First test - check its coverage directly
-			testCov, covErr := coverage.GetAllFunctionsCoverage(coverFile)
-			if covErr != nil {
-				return nil
-			}
-
-			for fn := range gaps {
-				// Count as improvement if this test provides any coverage for an unfilled gap
-				if testCov[fn] > currCov[fn] {
-					improvements = append(improvements, fn)
-				}
-			}
-		} else {
-			// Merge candidate with current merged coverage (just 2 files!)
-			mergedFile := fmt.Sprintf("merged_%s.out", executil.Sanitize(qName))
-
-			mergeErr := coverage.MergeFiles([]string{mergedSoFar, coverFile}, mergedFile)
-			if mergeErr != nil {
-				return nil
-			}
-
-			mergedCov, covErr := coverage.GetAllFunctionsCoverage(mergedFile)
-			os.Remove(mergedFile)
-
-			if covErr != nil {
-				return nil
-			}
-
-			for fn := range gaps {
-				// Count as improvement if merged coverage is better than current
-				if mergedCov[fn] > currCov[fn] {
-					improvements = append(improvements, fn)
-				}
-			}
-		}
-
-		return improvements
-	}
-
-	// Helper to find best test from a pool (parallelized)
-	findBestTest := func(pool []discovery.TestInfo) (discovery.TestInfo, []string) {
-		// Filter out already-kept tests
-		var candidates []discovery.TestInfo
+	// Helper to find best test from a pool (in-memory, no I/O)
+	findBestTest := func(pool []discovery.TestInfo) (discovery.TestInfo, int) {
+		var bestTest discovery.TestInfo
+		bestNewStatements := 0
 
 		for _, test := range pool {
-			if !keptTestSet[test.QualifiedName()] {
-				candidates = append(candidates, test)
+			qName := test.QualifiedName()
+			if keptTestSet[qName] {
+				continue
+			}
+
+			testBS := testBlockSets[qName]
+			if testBS == nil {
+				continue
+			}
+
+			// Count new statements this test would contribute
+			newStatements := currentCoverage.CountNewStatements(testBS)
+			if newStatements > bestNewStatements {
+				bestNewStatements = newStatements
+				bestTest = test
 			}
 		}
 
-		if len(candidates) == 0 {
-			return discovery.TestInfo{}, nil
-		}
-
-		// Copy current state for parallel evaluation
-		gapsCopy := make(map[string]bool)
-		for fn := range remainingGaps {
-			gapsCopy[fn] = true
-		}
-
-		covCopy := make(map[string]float64)
-		for fn, cov := range currentCoverage {
-			covCopy[fn] = cov
-		}
-
-		// Evaluate candidates in parallel
-		type result struct {
-			test         discovery.TestInfo
-			improvements []string
-		}
-
-		results := make([]result, len(candidates))
-		var wg sync.WaitGroup
-		// Use more workers for I/O-bound work (file merging + process spawning)
-		sem := make(chan struct{}, runtime.NumCPU()*4)
-
-		for i, test := range candidates {
-			wg.Add(1)
-
-			go func(idx int, t discovery.TestInfo) {
-				defer wg.Done()
-				sem <- struct{}{}
-				defer func() { <-sem }()
-
-				improved := evalCandidate(t, currentMergedFile, gapsCopy, covCopy)
-				results[idx] = result{test: t, improvements: improved}
-			}(i, test)
-		}
-
-		wg.Wait()
-
-		// Find best result (most improvements)
-		var bestTest discovery.TestInfo
-		var bestImprovements []string
-
-		for _, r := range results {
-			if len(r.improvements) > len(bestImprovements) {
-				bestTest = r.test
-				bestImprovements = r.improvements
-			}
-		}
-
-		return bestTest, bestImprovements
+		return bestTest, bestNewStatements
 	}
 
-	// Keep adding tests until no gaps remain
-	for len(remainingGaps) > 0 {
+	// Keep adding tests until coverage stops improving
+	for {
 		// First try baseline tests
-		bestTest, bestGapsFilled := findBestTest(baselineTests)
+		bestTest, newStatements := findBestTest(baselineTests)
 		isBaseline := true
 
-		// If no baseline test fills any gap, try non-baseline tests
-		if len(bestGapsFilled) == 0 {
-			bestTest, bestGapsFilled = findBestTest(nonBaselineTests)
+		// If no baseline test adds coverage, try non-baseline tests
+		if newStatements == 0 {
+			bestTest, newStatements = findBestTest(nonBaselineTests)
 			isBaseline = false
 		}
 
-		if len(bestGapsFilled) == 0 {
-			// No test can fill any remaining gaps
+		if newStatements == 0 {
+			// No test can add any new coverage
 			break
 		}
 
@@ -434,53 +342,19 @@ func Find(config Config) error {
 			marker = " (baseline)"
 		}
 
-		fmt.Printf("  %-80s %6d   KEEP%s\n", qName, len(bestGapsFilled), marker)
+		fmt.Printf("  %-80s %6d   KEEP%s\n", qName, newStatements, marker)
 
 		keptTests = append(keptTests, testResult{
 			name:       bestTest.Name,
 			pkg:        bestTest.Pkg,
 			isBaseline: isBaseline,
-			gapsFilled: len(bestGapsFilled),
+			gapsFilled: newStatements,
 		})
 		keptTestSet[qName] = true
 		keptTestFiles = append(keptTestFiles, testCoverageFiles[qName])
 
-		// Update the running merged coverage file
-		newMergedFile := fmt.Sprintf("current_merged_%d.out", len(keptTestFiles))
-
-		if currentMergedFile == "" {
-			// First test - just copy its coverage file
-			data, _ := os.ReadFile(testCoverageFiles[qName])
-			_ = os.WriteFile(newMergedFile, data, 0o600)
-		} else {
-			// Merge with existing
-			_ = coverage.MergeFiles([]string{currentMergedFile, testCoverageFiles[qName]}, newMergedFile)
-			os.Remove(currentMergedFile)
-		}
-
-		currentMergedFile = newMergedFile
-
-		// Update current coverage levels from new merged file
-		newCoverage, err := coverage.GetAllFunctionsCoverage(newMergedFile)
-		if err == nil {
-			for fn := range targetFuncs {
-				if newCov, ok := newCoverage[fn]; ok {
-					currentCoverage[fn] = newCov
-				}
-			}
-		}
-
-		// Remove gaps only when they reach threshold
-		for fn := range remainingGaps {
-			if currentCoverage[fn] >= config.CoverageThreshold {
-				delete(remainingGaps, fn)
-			}
-		}
-	}
-
-	// Clean up the final merged file
-	if currentMergedFile != "" {
-		os.Remove(currentMergedFile)
+		// Merge this test's coverage into current
+		currentCoverage.Merge(testBlockSets[qName])
 	}
 
 	// Mark remaining tests as redundant
@@ -490,9 +364,9 @@ func Find(config Config) error {
 	for _, test := range allTestOrder {
 		qName := test.QualifiedName()
 		if !keptTestSet[qName] {
-			isBaseline := baselineTestSet[qName]
+			testIsBaseline := isBaseline(test)
 			marker := ""
-			if isBaseline {
+			if testIsBaseline {
 				marker = " (baseline)"
 			}
 
@@ -501,10 +375,10 @@ func Find(config Config) error {
 			result := testResult{
 				name:       test.Name,
 				pkg:        test.Pkg,
-				isBaseline: isBaseline,
+				isBaseline: testIsBaseline,
 			}
 
-			if isBaseline {
+			if testIsBaseline {
 				redundantBaselineTests = append(redundantBaselineTests, result)
 			} else {
 				redundantNonBaselineTests = append(redundantNonBaselineTests, result)
@@ -518,52 +392,16 @@ func Find(config Config) error {
 	if len(keptTestFiles) == 0 {
 		fmt.Println("  WARNING: No tests kept - validation skipped")
 	} else {
-		finalMergedFile := "final_coverage.out"
+		// Compare kept coverage to total coverage (should match)
+		keptStatements := currentCoverage.CoveredStatements()
+		totalStatements := totalCoverage.CoveredStatements()
 
-		err = coverage.MergeFiles(keptTestFiles, finalMergedFile)
-		if err != nil {
-			return fmt.Errorf("failed to merge final coverage: %w", err)
-		}
-
-		finalCoverage, err := coverage.GetAllFunctionsCoverage(finalMergedFile)
-		if err != nil {
-			os.Remove(finalMergedFile)
-
-			return fmt.Errorf("failed to analyze final coverage: %w", err)
-		}
-
-		os.Remove(finalMergedFile)
-
-		var validationErrors []string
-
-		for fn := range targetFuncs {
-			if finalCoverage[fn] < config.CoverageThreshold {
-				validationErrors = append(validationErrors,
-					fmt.Sprintf("  %s: %.1f%% (target: %.0f%%)", fn, finalCoverage[fn], config.CoverageThreshold))
-			}
-		}
-
-		if len(validationErrors) > 0 {
-			fmt.Printf("  VALIDATION FAILED: %d functions dropped below threshold:\n", len(validationErrors))
-
-			for _, e := range validationErrors {
-				fmt.Println(e)
-			}
-
-			return fmt.Errorf("validation failed: %d functions dropped below coverage threshold", len(validationErrors))
-		}
-
-		fmt.Printf("  VALIDATION PASSED: All %d target functions maintain %.0f%%+ coverage\n",
-			len(targetFuncs), config.CoverageThreshold)
-	}
-
-	// Report unfilled gaps
-	if len(remainingGaps) > 0 {
-		fmt.Printf("\n  WARNING: %d functions could not reach %.0f%% even with all tests:\n",
-			len(remainingGaps), config.CoverageThreshold)
-
-		for fn := range remainingGaps {
-			fmt.Printf("    %s: %.1f%%\n", fn, targetCoverage[fn])
+		if keptStatements < totalStatements {
+			fmt.Printf("  VALIDATION WARNING: Kept tests cover %d statements, total was %d\n",
+				keptStatements, totalStatements)
+		} else {
+			fmt.Printf("  VALIDATION PASSED: Kept tests cover %d/%d statements (%.1f%%)\n",
+				keptStatements, currentCoverage.TotalStatements(), currentCoverage.CoveragePercent())
 		}
 	}
 
@@ -644,7 +482,3 @@ func Find(config Config) error {
 
 	return nil
 }
-
-
-
-

@@ -295,3 +295,138 @@ func ParseBlock(line string) (Block, error) {
 		Count:      count,
 	}, nil
 }
+
+// BlockSet represents coverage data as a set of covered blocks with statement counts.
+// Key is block ID (e.g., "file.go:10.5,20.10"), value is (statements, covered).
+type BlockSet struct {
+	// Blocks maps block ID to (statements, isCovered)
+	Blocks map[string]BlockInfo
+}
+
+// BlockInfo holds statement count and coverage status for a block.
+type BlockInfo struct {
+	Statements int
+	Covered    bool
+}
+
+// ParseFileToBlockSet parses a coverage file into an in-memory BlockSet.
+func ParseFileToBlockSet(filename string) (*BlockSet, error) {
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read %s: %w", filename, err)
+	}
+
+	bs := &BlockSet{Blocks: make(map[string]BlockInfo)}
+	lines := strings.Split(string(data), "\n")
+
+	for _, line := range lines[1:] { // Skip mode line
+		if line == "" || strings.Contains(line, ".qtpl:") {
+			continue
+		}
+
+		parts := strings.Fields(line)
+		if len(parts) != 3 {
+			continue
+		}
+
+		blockID := parts[0]
+		statements, _ := strconv.Atoi(parts[1])
+		count, _ := strconv.Atoi(parts[2])
+
+		// If block already exists, merge (keep max coverage)
+		if existing, ok := bs.Blocks[blockID]; ok {
+			bs.Blocks[blockID] = BlockInfo{
+				Statements: existing.Statements,
+				Covered:    existing.Covered || count > 0,
+			}
+		} else {
+			bs.Blocks[blockID] = BlockInfo{
+				Statements: statements,
+				Covered:    count > 0,
+			}
+		}
+	}
+
+	return bs, nil
+}
+
+// Clone creates a deep copy of the BlockSet.
+func (bs *BlockSet) Clone() *BlockSet {
+	clone := &BlockSet{Blocks: make(map[string]BlockInfo, len(bs.Blocks))}
+	for k, v := range bs.Blocks {
+		clone.Blocks[k] = v
+	}
+	return clone
+}
+
+// Merge combines another BlockSet into this one (union of coverage).
+func (bs *BlockSet) Merge(other *BlockSet) {
+	for blockID, info := range other.Blocks {
+		if existing, ok := bs.Blocks[blockID]; ok {
+			bs.Blocks[blockID] = BlockInfo{
+				Statements: existing.Statements,
+				Covered:    existing.Covered || info.Covered,
+			}
+		} else {
+			bs.Blocks[blockID] = info
+		}
+	}
+}
+
+// CoveredStatements returns the number of covered statements.
+func (bs *BlockSet) CoveredStatements() int {
+	count := 0
+	for _, info := range bs.Blocks {
+		if info.Covered {
+			count += info.Statements
+		}
+	}
+	return count
+}
+
+// TotalStatements returns the total number of statements.
+func (bs *BlockSet) TotalStatements() int {
+	count := 0
+	for _, info := range bs.Blocks {
+		count += info.Statements
+	}
+	return count
+}
+
+// CoveragePercent returns the overall coverage percentage.
+func (bs *BlockSet) CoveragePercent() float64 {
+	total := bs.TotalStatements()
+	if total == 0 {
+		return 0
+	}
+	return float64(bs.CoveredStatements()) * 100.0 / float64(total)
+}
+
+// NewBlocksFrom returns block IDs that are covered in other but not in bs.
+func (bs *BlockSet) NewBlocksFrom(other *BlockSet) []string {
+	var newBlocks []string
+	for blockID, info := range other.Blocks {
+		if !info.Covered {
+			continue
+		}
+		if existing, ok := bs.Blocks[blockID]; !ok || !existing.Covered {
+			newBlocks = append(newBlocks, blockID)
+		}
+	}
+	return newBlocks
+}
+
+// CountNewStatements returns the number of new statements that would be covered
+// if other's coverage was merged into this BlockSet.
+func (bs *BlockSet) CountNewStatements(other *BlockSet) int {
+	count := 0
+	for blockID, info := range other.Blocks {
+		if !info.Covered {
+			continue
+		}
+		if existing, ok := bs.Blocks[blockID]; !ok || !existing.Covered {
+			count += info.Statements
+		}
+	}
+	return count
+}
