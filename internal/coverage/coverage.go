@@ -430,3 +430,27 @@ func (bs *BlockSet) CountNewStatements(other *BlockSet) int {
 	}
 	return count
 }
+
+// WriteBlockSetToFile writes a BlockSet to a coverage file.
+func WriteBlockSetToFile(bs *BlockSet, filename string) error {
+	var lines []string
+	lines = append(lines, "mode: set")
+
+	// Sort block IDs for deterministic output
+	var blockIDs []string
+	for blockID := range bs.Blocks {
+		blockIDs = append(blockIDs, blockID)
+	}
+	sort.Strings(blockIDs)
+
+	for _, blockID := range blockIDs {
+		info := bs.Blocks[blockID]
+		count := 0
+		if info.Covered {
+			count = 1
+		}
+		lines = append(lines, fmt.Sprintf("%s %d %d", blockID, info.Statements, count))
+	}
+
+	return os.WriteFile(filename, []byte(strings.Join(lines, "\n")+"\n"), 0o600)
+}

@@ -241,58 +241,43 @@ func Find(config Config) error {
 		wg.Wait()
 	}
 
-	// Step 4: Pre-compute function coverage for each test (O(n) subprocess calls)
-	fmt.Println("\nStep 4: Computing function coverage for each test...")
+	// Step 4: Parse coverage files into memory and compute total function coverage
+	fmt.Println("\nStep 4: Parsing coverage files and computing function coverage...")
 
-	// testFuncCoverage maps test name -> function name -> coverage percentage
-	testFuncCoverage := make(map[string]map[string]float64)
-
-	// Compute in parallel with progress
-	var funcCovMu sync.Mutex
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, runtime.NumCPU())
-	var completed int32
+	// Parse all coverage files into BlockSets (in-memory)
+	testBlockSets := make(map[string]*coverage.BlockSet)
 
 	for qName, coverFile := range testCoverageFiles {
-		wg.Add(1)
-
-		go func(qName, coverFile string) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			funcCov, err := coverage.GetAllFunctionsCoverage(coverFile)
-			current := atomic.AddInt32(&completed, 1)
-
-			if err != nil {
-				fmt.Printf("    [%d/%d] %s... FAILED\n", current, len(testCoverageFiles), qName)
-				return
-			}
-
-			funcCovMu.Lock()
-			testFuncCoverage[qName] = funcCov
-			funcCovMu.Unlock()
-
-			fmt.Printf("    [%d/%d] %s... OK (%d functions)\n", current, len(testCoverageFiles), qName, len(funcCov))
-		}(qName, coverFile)
+		bs, err := coverage.ParseFileToBlockSet(coverFile)
+		if err != nil {
+			fmt.Printf("  Warning: failed to parse %s: %v\n", coverFile, err)
+			continue
+		}
+		testBlockSets[qName] = bs
 	}
 
-	wg.Wait()
-
-	if len(testFuncCoverage) == 0 {
+	if len(testBlockSets) == 0 {
 		return fmt.Errorf("no tests ran successfully")
 	}
 
-	fmt.Printf("  Computed function coverage for %d tests\n", len(testFuncCoverage))
+	fmt.Printf("  Parsed %d coverage files into memory\n", len(testBlockSets))
 
-	// Compute total coverage by merging all test function coverage
-	totalFuncCoverage := make(map[string]float64)
-	for _, funcCov := range testFuncCoverage {
-		for fn, cov := range funcCov {
-			if cov > totalFuncCoverage[fn] {
-				totalFuncCoverage[fn] = cov
-			}
-		}
+	// Compute total coverage by merging all blocks
+	totalBlockSet := &coverage.BlockSet{Blocks: make(map[string]coverage.BlockInfo)}
+	for _, bs := range testBlockSets {
+		totalBlockSet.Merge(bs)
+	}
+
+	// Write merged coverage to temp file and get function coverage
+	totalCoverageFile := "total_coverage_temp.out"
+	if err := coverage.WriteBlockSetToFile(totalBlockSet, totalCoverageFile); err != nil {
+		return fmt.Errorf("failed to write total coverage: %w", err)
+	}
+
+	totalFuncCoverage, err := coverage.GetAllFunctionsCoverage(totalCoverageFile)
+	os.Remove(totalCoverageFile)
+	if err != nil {
+		return fmt.Errorf("failed to get function coverage: %w", err)
 	}
 
 	// Identify target functions (those that reach threshold with all tests)
@@ -305,9 +290,10 @@ func Find(config Config) error {
 
 	fmt.Printf("  Target: %d functions at %.0f%%+ (with all tests)\n", len(targetFuncs), config.CoverageThreshold)
 
-	// Step 5: Greedy addition starting from 0 coverage (in-memory)
+	// Step 5: Greedy addition using block-level coverage (in-memory)
+	// This properly handles the additive nature of coverage
 	fmt.Println("\nStep 5: Building minimal test set from zero (preferring baseline tests)...")
-	fmt.Printf("  %-80s %6s   %s\n", "TEST", "FILLS", "DECISION")
+	fmt.Printf("  %-80s %6s   %s\n", "TEST", "NEW", "DECISION")
 	fmt.Printf("  %-80s %6s   %s\n", strings.Repeat("-", 80), "------", "--------")
 
 	type testResult struct {
@@ -321,39 +307,13 @@ func Find(config Config) error {
 	keptTestFiles := []string{}
 	keptTestSet := make(map[string]bool)
 
-	// Track current coverage level for each target function (starts at 0)
-	currentCoverage := make(map[string]float64)
-	for fn := range targetFuncs {
-		currentCoverage[fn] = 0
-	}
-
-	// Track which functions still need coverage (below threshold)
-	remainingGaps := make(map[string]bool)
-	for fn := range targetFuncs {
-		remainingGaps[fn] = true
-	}
-
-	// Helper to count improvements a test would provide
-	countImprovements := func(qName string) int {
-		funcCov := testFuncCoverage[qName]
-		if funcCov == nil {
-			return 0
-		}
-
-		count := 0
-		for fn := range remainingGaps {
-			if funcCov[fn] > currentCoverage[fn] {
-				count++
-			}
-		}
-
-		return count
-	}
+	// Track current merged coverage (starts empty)
+	currentCoverage := &coverage.BlockSet{Blocks: make(map[string]coverage.BlockInfo)}
 
 	// Helper to find best test from a pool (in-memory, no I/O)
 	findBestTest := func(pool []discovery.TestInfo) (discovery.TestInfo, int) {
 		var bestTest discovery.TestInfo
-		bestImprovements := 0
+		bestNewStatements := 0
 
 		for _, test := range pool {
 			qName := test.QualifiedName()
@@ -361,48 +321,36 @@ func Find(config Config) error {
 				continue
 			}
 
-			improvements := countImprovements(qName)
-			if improvements > bestImprovements {
-				bestImprovements = improvements
+			testBS := testBlockSets[qName]
+			if testBS == nil {
+				continue
+			}
+
+			// Count new statements this test would contribute
+			newStatements := currentCoverage.CountNewStatements(testBS)
+			if newStatements > bestNewStatements {
+				bestNewStatements = newStatements
 				bestTest = test
 			}
 		}
 
-		return bestTest, bestImprovements
+		return bestTest, bestNewStatements
 	}
 
-	// Helper to apply a test's coverage
-	applyTestCoverage := func(qName string) {
-		funcCov := testFuncCoverage[qName]
-		if funcCov == nil {
-			return
-		}
-
-		for fn := range targetFuncs {
-			if funcCov[fn] > currentCoverage[fn] {
-				currentCoverage[fn] = funcCov[fn]
-			}
-			// Check if this function now meets threshold
-			if currentCoverage[fn] >= config.CoverageThreshold {
-				delete(remainingGaps, fn)
-			}
-		}
-	}
-
-	// Keep adding tests until all gaps are filled
-	for len(remainingGaps) > 0 {
+	// Keep adding tests until coverage stops improving
+	for {
 		// First try baseline tests
-		bestTest, improvements := findBestTest(baselineTests)
+		bestTest, newStatements := findBestTest(baselineTests)
 		isBaseline := true
 
 		// If no baseline test adds coverage, try non-baseline tests
-		if improvements == 0 {
-			bestTest, improvements = findBestTest(nonBaselineTests)
+		if newStatements == 0 {
+			bestTest, newStatements = findBestTest(nonBaselineTests)
 			isBaseline = false
 		}
 
-		if improvements == 0 {
-			// No test can improve any remaining gaps
+		if newStatements == 0 {
+			// No test can add any new coverage
 			break
 		}
 
@@ -413,19 +361,19 @@ func Find(config Config) error {
 			marker = " (baseline)"
 		}
 
-		fmt.Printf("  %-80s %6d   KEEP%s\n", qName, improvements, marker)
+		fmt.Printf("  %-80s %6d   KEEP%s\n", qName, newStatements, marker)
 
 		keptTests = append(keptTests, testResult{
 			name:       bestTest.Name,
 			pkg:        bestTest.Pkg,
 			isBaseline: isBaseline,
-			gapsFilled: improvements,
+			gapsFilled: newStatements,
 		})
 		keptTestSet[qName] = true
 		keptTestFiles = append(keptTestFiles, testCoverageFiles[qName])
 
-		// Apply this test's coverage
-		applyTestCoverage(qName)
+		// Merge this test's coverage into current
+		currentCoverage.Merge(testBlockSets[qName])
 	}
 
 	// Mark remaining tests as redundant
@@ -463,20 +411,33 @@ func Find(config Config) error {
 	if len(keptTestFiles) == 0 {
 		fmt.Println("  WARNING: No tests kept - validation skipped")
 	} else {
-		// Count how many target functions are now covered
-		coveredFuncs := 0
-		for fn := range targetFuncs {
-			if currentCoverage[fn] >= config.CoverageThreshold {
-				coveredFuncs++
-			}
-		}
-
-		if coveredFuncs < len(targetFuncs) {
-			fmt.Printf("  VALIDATION WARNING: Only %d/%d target functions at %.0f%%+ coverage\n",
-				coveredFuncs, len(targetFuncs), config.CoverageThreshold)
+		// Write current merged coverage to temp file and compute function coverage
+		keptCoverageFile := "kept_coverage_temp.out"
+		if err := coverage.WriteBlockSetToFile(currentCoverage, keptCoverageFile); err != nil {
+			fmt.Printf("  VALIDATION ERROR: failed to write coverage: %v\n", err)
 		} else {
-			fmt.Printf("  VALIDATION PASSED: All %d target functions maintain %.0f%%+ coverage\n",
-				len(targetFuncs), config.CoverageThreshold)
+			keptFuncCoverage, err := coverage.GetAllFunctionsCoverage(keptCoverageFile)
+			os.Remove(keptCoverageFile)
+
+			if err != nil {
+				fmt.Printf("  VALIDATION ERROR: failed to compute function coverage: %v\n", err)
+			} else {
+				// Count how many target functions are now at threshold
+				coveredFuncs := 0
+				for fn := range targetFuncs {
+					if keptFuncCoverage[fn] >= config.CoverageThreshold {
+						coveredFuncs++
+					}
+				}
+
+				if coveredFuncs < len(targetFuncs) {
+					fmt.Printf("  VALIDATION WARNING: Only %d/%d target functions at %.0f%%+ coverage\n",
+						coveredFuncs, len(targetFuncs), config.CoverageThreshold)
+				} else {
+					fmt.Printf("  VALIDATION PASSED: All %d target functions maintain %.0f%%+ coverage\n",
+						len(targetFuncs), config.CoverageThreshold)
+				}
+			}
 		}
 	}
 
