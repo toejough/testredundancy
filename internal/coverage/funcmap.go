@@ -31,13 +31,15 @@ func BuildFunctionMap(moduleRoot string) (FunctionMap, error) {
 	goModPath := filepath.Join(moduleRoot, "go.mod")
 	goModContent, err := os.ReadFile(goModPath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read go.mod at %s: %w", goModPath, err)
 	}
 
 	modulePath := extractModulePath(string(goModContent))
 	if modulePath == "" {
-		return nil, fmt.Errorf("could not extract module path from go.mod")
+		return nil, fmt.Errorf("could not extract module path from go.mod at %s", goModPath)
 	}
+
+	fmt.Printf("  [DEBUG] Module path: %s, root: %s\n", modulePath, moduleRoot)
 
 	// Walk the source tree
 	err = filepath.Walk(moduleRoot, func(path string, info os.FileInfo, err error) error {

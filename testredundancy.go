@@ -245,6 +245,8 @@ func Find(config Config) error {
 	fmt.Println("\nStep 4: Parsing coverage files and building function map...")
 
 	// Build function map from source (AST parsing)
+	cwd, _ := os.Getwd()
+	fmt.Printf("  Working directory: %s\n", cwd)
 	funcMap, err := coverage.BuildFunctionMap(".")
 	if err != nil {
 		return fmt.Errorf("failed to build function map: %w", err)
