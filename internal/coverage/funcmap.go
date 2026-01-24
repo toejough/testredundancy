@@ -39,18 +39,16 @@ func BuildFunctionMap(moduleRoot string) (FunctionMap, error) {
 		return nil, fmt.Errorf("could not extract module path from go.mod at %s", goModPath)
 	}
 
-	fmt.Printf("  [DEBUG] Module path: %s, root: %s\n", modulePath, moduleRoot)
-
 	// Walk the source tree
 	err = filepath.Walk(moduleRoot, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 
-		// Skip vendor, testdata, and hidden directories
+		// Skip vendor, testdata, and hidden directories (but not "." itself)
 		if info.IsDir() {
 			name := info.Name()
-			if name == "vendor" || name == "testdata" || strings.HasPrefix(name, ".") {
+			if name == "vendor" || name == "testdata" || (strings.HasPrefix(name, ".") && name != ".") {
 				return filepath.SkipDir
 			}
 			return nil
