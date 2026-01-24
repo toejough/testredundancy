@@ -1,6 +1,7 @@
 package coverage
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -35,7 +36,7 @@ func BuildFunctionMap(moduleRoot string) (FunctionMap, error) {
 
 	modulePath := extractModulePath(string(goModContent))
 	if modulePath == "" {
-		return nil, err
+		return nil, fmt.Errorf("could not extract module path from go.mod")
 	}
 
 	// Walk the source tree
