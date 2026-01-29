@@ -26,20 +26,13 @@ func (t TestInfo) QualifiedName() string {
 
 // ListTests lists all test functions with their packages for the given package pattern.
 func ListTests(pkgPattern string) ([]TestInfo, error) {
-	// First, expand the package pattern to get actual packages
-	listOut, err := executil.Output(context.Background(), "go", "list", pkgPattern)
+	var allTests []TestInfo
+	packages, err := ExpandPackages(pkgPattern)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list packages: %w", err)
 	}
 
-	var allTests []TestInfo
-	packages := strings.Split(strings.TrimSpace(listOut), "\n")
-
 	for _, pkg := range packages {
-		if pkg == "" {
-			continue
-		}
-
 		out, err := executil.Output(context.Background(), "go", "test", "-list", ".", pkg)
 		if err != nil {
 			// Package may have no tests, skip it

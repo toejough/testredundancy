@@ -2,7 +2,6 @@
 package testredundancy
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -49,24 +48,28 @@ func Find(config Config) error {
 	baselinePatterns := make(map[string]string) // key: "pkg" -> pattern prefix
 
 	for _, spec := range config.BaselineTests {
-		if spec.TestPattern != "" {
-			// Resolve package path to full module path for consistent matching
-			fullPkg, err := executil.Output(context.Background(), "go", "list", spec.Package)
-			if err != nil {
-				return fmt.Errorf("failed to resolve package %s: %w", spec.Package, err)
-			}
+		packages, err := discovery.ExpandPackages(spec.Package)
+		if err != nil {
+			return fmt.Errorf("failed to expand baseline package %s: %w", spec.Package, err)
+		}
+		if len(packages) == 0 {
+			continue
+		}
 
-			fullPkg = strings.TrimSpace(fullPkg)
-			// Store pattern for prefix matching
-			baselinePatterns[fullPkg] = spec.TestPattern
+		if spec.TestPattern != "" {
+			for _, pkg := range packages {
+				baselinePatterns[pkg] = spec.TestPattern
+			}
 		} else {
-			// List all test functions in package
-			pkgTests, err := discovery.ListTests(spec.Package)
-			if err != nil {
-				fmt.Printf("  Warning: couldn't list tests in %s: %v\n", spec.Package, err)
-			} else {
-				for _, t := range pkgTests {
-					baselineTestSet[t.QualifiedName()] = true
+			for _, pkg := range packages {
+				// List all test functions in package
+				pkgTests, err := discovery.ListTests(pkg)
+				if err != nil {
+					fmt.Printf("  Warning: couldn't list tests in %s: %v\n", pkg, err)
+				} else {
+					for _, t := range pkgTests {
+						baselineTestSet[t.QualifiedName()] = true
+					}
 				}
 			}
 		}
