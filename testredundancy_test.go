@@ -32,7 +32,7 @@ func TestBaselinePatternExpandsAcrossPackages(t *testing.T) {
 	}
 }
 
-func TestBaselineEmptyPatternIncludesAllTests(t *testing.T) {
+func TestBaselineEmptyPatternNoMatches(t *testing.T) {
 	root := writeTempModule(t)
 
 	config := testredundancy.Config{
@@ -49,8 +49,8 @@ func TestBaselineEmptyPatternIncludesAllTests(t *testing.T) {
 		t.Fatalf("Find error: %v", err)
 	}
 
-	if !strings.Contains(output, "Found 3 baseline tests") {
-		t.Fatalf("expected output to include baseline count 3, got: %s", output)
+	if !strings.Contains(output, "Found 0 baseline tests") {
+		t.Fatalf("expected output to include baseline count 0, got: %s", output)
 	}
 }
 
