@@ -1,0 +1,67 @@
+[[links]]
+  from = "REQ-001"
+  to = ["DES-001"]
+
+[[links]]
+  from = "REQ-004"
+  to = ["DES-001"]
+
+[[links]]
+  from = "REQ-005"
+  to = ["DES-001"]
+
+[[links]]
+  from = "REQ-002"
+  to = ["DES-002"]
+
+[[links]]
+  from = "REQ-003"
+  to = ["DES-002"]
+
+[[links]]
+  from = "REQ-006"
+  to = ["DES-002"]
+
+[[links]]
+  from = "REQ-007"
+  to = ["DES-002"]
+
+[[links]]
+  from = "REQ-008"
+  to = ["DES-002", "TASK-004"]
+
+[[links]]
+  from = "REQ-009"
+  to = ["DES-002"]
+
+[[links]]
+  from = "REQ-010"
+  to = ["DES-002"]
+
+[[links]]
+  from = "REQ-011"
+  to = ["DES-002"]
+
+[[links]]
+  from = "DES-001"
+  to = ["ARCH-001", "ARCH-004"]
+
+[[links]]
+  from = "DES-002"
+  to = ["ARCH-002", "ARCH-003"]
+
+[[links]]
+  from = "ARCH-001"
+  to = ["TASK-001"]
+
+[[links]]
+  from = "ARCH-003"
+  to = ["TASK-001", "TASK-003", "TASK-004"]
+
+[[links]]
+  from = "ARCH-002"
+  to = ["TASK-002"]
+
+[[links]]
+  from = "ARCH-004"
+  to = ["TASK-002"]

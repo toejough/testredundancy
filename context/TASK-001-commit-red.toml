@@ -1,0 +1,12 @@
+[task]
+name = "TASK-001"
+
+[skill]
+name = "commit"
+
+[context]
+phase = "tdd-red"
+summary = "Add failing tests for module-root-aware package expansion helper."
+scope = "discovery"
+files = ["internal/discovery/expand_test.go"]
+traceability = ["TASK-001"]

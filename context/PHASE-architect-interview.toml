@@ -1,0 +1,11 @@
+[task]
+name = "PHASE"
+
+[skill]
+name = "architect-interview"
+
+[context]
+summary = "Library-only change to allow package expansion in BaselineTests. No UI/CLI changes."
+requirements_path = "/Users/joe/repos/personal/testredundancy/requirements.md"
+design_path = "/Users/joe/repos/personal/testredundancy/design.md"
+repo = "/Users/joe/repos/personal/testredundancy"

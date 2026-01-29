@@ -1,0 +1,12 @@
+[task]
+name = "TASK-003"
+
+[skill]
+name = "commit"
+
+[context]
+phase = "tdd-red"
+summary = "Add edge case tests for baseline expansion and error handling." 
+scope = "testredundancy"
+files = ["testredundancy_test.go"]
+traceability = ["TASK-003"]

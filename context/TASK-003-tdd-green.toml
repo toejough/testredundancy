@@ -1,0 +1,10 @@
+[task]
+name = "TASK-003"
+
+[skill]
+name = "tdd-green"
+
+[context]
+summary = "All edge case tests already pass; no additional implementation required." 
+files = []
+traceability = ["TASK-003"]

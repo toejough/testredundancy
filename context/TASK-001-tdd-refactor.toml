@@ -1,0 +1,10 @@
+[task]
+name = "TASK-001"
+
+[skill]
+name = "tdd-refactor"
+
+[context]
+summary = "No refactor changes beyond implementation." 
+files = []
+traceability = ["TASK-001"]

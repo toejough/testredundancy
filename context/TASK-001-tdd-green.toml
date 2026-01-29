@@ -1,0 +1,10 @@
+[task]
+name = "TASK-001"
+
+[skill]
+name = "tdd-green"
+
+[context]
+summary = "Implement module-root-aware package expansion helper for go list." 
+files = ["internal/discovery/expand.go", "internal/exec/exec.go", "internal/discovery/expand_test.go"]
+traceability = ["TASK-001", "ARCH-001", "ARCH-003"]

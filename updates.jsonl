@@ -1,0 +1,9 @@
+{"timestamp":"2026-01-29T13:40:49Z","level":"phase","subject":"phase-change","message":"Starting PM interview"}
+{"timestamp":"2026-01-29T14:59:45Z","level":"phase","subject":"phase-result","message":"PM interview complete. 11 requirements captured."}
+{"timestamp":"2026-01-29T17:21:39Z","level":"phase","subject":"phase-result","message":"Design complete. 2 design elements captured; no visual assets."}
+{"timestamp":"2026-01-29T17:26:55Z","level":"phase","subject":"phase-result","message":"Architecture complete. 4 architecture decisions captured."}
+{"timestamp":"2026-01-29T17:30:03Z","level":"phase","subject":"phase-result","message":"Task breakdown complete. 3 tasks captured."}
+{"timestamp":"2026-01-29T17:43:39Z","level":"status","subject":"task-status","task":"TASK-001","message":"TASK-001: complete"}
+{"timestamp":"2026-01-29T17:50:58Z","level":"status","subject":"task-status","task":"TASK-002","message":"TASK-002: complete"}
+{"timestamp":"2026-01-29T17:54:52Z","level":"status","subject":"task-status","task":"TASK-003","message":"TASK-003: complete"}
+{"timestamp":"2026-01-29T18:00:45Z","level":"phase","subject":"phase-change","message":"Project complete"}

@@ -1,0 +1,10 @@
+[task]
+name = "PHASE"
+
+[skill]
+name = "meta-audit"
+
+[context]
+corrections_path = "/Users/joe/repos/personal/testredundancy/corrections.jsonl"
+repo = "/Users/joe/repos/personal/testredundancy"
+reason = "project completion"

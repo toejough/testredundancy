@@ -1,0 +1,10 @@
+[task]
+name = "PHASE"
+
+[skill]
+name = "design-interview"
+
+[context]
+summary = "Library-only change: allow package expansion for BaselineTests package patterns like ./... when finding baseline tests. No UI/CLI required."
+requirements_path = "/Users/joe/repos/personal/testredundancy/requirements.md"
+repo = "/Users/joe/repos/personal/testredundancy"

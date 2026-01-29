@@ -1,0 +1,10 @@
+[task]
+name = "TASK-001"
+
+[skill]
+name = "tdd-red"
+
+[context]
+summary = "Write failing tests for module-root-aware package expansion helper using go list (ARCH-001/003)."
+files = ["internal/discovery/expand_test.go", "internal/exec/exec.go"]
+traceability = ["REQ-001", "REQ-003", "REQ-006", "REQ-010", "ARCH-001", "ARCH-003", "DES-001"]

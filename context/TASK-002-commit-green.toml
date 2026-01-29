@@ -1,0 +1,12 @@
+[task]
+name = "TASK-002"
+
+[skill]
+name = "commit"
+
+[context]
+phase = "tdd-green"
+summary = "Integrate package expansion into baseline discovery and list tests using module-root expansion." 
+scope = "testredundancy"
+files = ["testredundancy.go", "internal/discovery/discovery.go", "testredundancy_test.go"]
+traceability = ["TASK-002"]

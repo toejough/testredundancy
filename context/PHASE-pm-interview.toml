@@ -1,0 +1,10 @@
+[task]
+name = "PHASE"
+
+[skill]
+name = "pm-interview"
+
+[context]
+summary = "New project: allow package expansion for expressions like ./... so baseline test discovery searches all matching packages, not just a specific package."
+request = "Implement package expansion for patterns like ./... when identifying baseline tests."
+repo = "/Users/joe/repos/personal/testredundancy"

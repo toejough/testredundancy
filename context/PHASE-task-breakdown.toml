@@ -1,0 +1,12 @@
+[task]
+name = "PHASE"
+
+[skill]
+name = "task-breakdown"
+
+[context]
+summary = "Break down implementation for baseline test package expansion via go list, module-root resolution, error handling, no API changes."
+requirements_path = "/Users/joe/repos/personal/testredundancy/requirements.md"
+design_path = "/Users/joe/repos/personal/testredundancy/design.md"
+architecture_path = "/Users/joe/repos/personal/testredundancy/architecture.md"
+repo = "/Users/joe/repos/personal/testredundancy"
