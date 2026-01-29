@@ -13,18 +13,6 @@ import (
 func TestBaselinePatternExpandsAcrossPackages(t *testing.T) {
 	root := writeTempModule(t)
 
-	oldWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd error: %v", err)
-	}
-	defer func() {
-		_ = os.Chdir(oldWD)
-	}()
-
-	if err := os.Chdir(root); err != nil {
-		t.Fatalf("chdir to temp module: %v", err)
-	}
-
 	config := testredundancy.Config{
 		BaselineTests: []testredundancy.BaselineTestSpec{
 			{Package: "./...", TestPattern: "TestProperty_"},
@@ -34,15 +22,75 @@ func TestBaselinePatternExpandsAcrossPackages(t *testing.T) {
 		CoveragePackages:  "./...",
 	}
 
-	output, err := captureOutput(func() error {
-		return testredundancy.Find(config)
-	})
+	output, err := runFindInModule(t, root, config)
 	if err != nil {
 		t.Fatalf("Find error: %v", err)
 	}
 
 	if !strings.Contains(output, "Found 2 baseline tests") {
 		t.Fatalf("expected output to include baseline count 2, got: %s", output)
+	}
+}
+
+func TestBaselineEmptyPatternIncludesAllTests(t *testing.T) {
+	root := writeTempModule(t)
+
+	config := testredundancy.Config{
+		BaselineTests: []testredundancy.BaselineTestSpec{
+			{Package: "./...", TestPattern: ""},
+		},
+		CoverageThreshold: 0,
+		PackageToAnalyze:  "./...",
+		CoveragePackages:  "./...",
+	}
+
+	output, err := runFindInModule(t, root, config)
+	if err != nil {
+		t.Fatalf("Find error: %v", err)
+	}
+
+	if !strings.Contains(output, "Found 3 baseline tests") {
+		t.Fatalf("expected output to include baseline count 3, got: %s", output)
+	}
+}
+
+func TestBaselineNoPackagesNoError(t *testing.T) {
+	root := writeTempModule(t)
+
+	config := testredundancy.Config{
+		BaselineTests: []testredundancy.BaselineTestSpec{
+			{Package: "./.../doesnotexist", TestPattern: "TestProperty_"},
+		},
+		CoverageThreshold: 0,
+		PackageToAnalyze:  "./...",
+		CoveragePackages:  "./...",
+	}
+
+	output, err := runFindInModule(t, root, config)
+	if err != nil {
+		t.Fatalf("Find error: %v", err)
+	}
+
+	if !strings.Contains(output, "Found 0 baseline tests") {
+		t.Fatalf("expected output to include baseline count 0, got: %s", output)
+	}
+}
+
+func TestBaselineExpansionErrorSurfaces(t *testing.T) {
+	root := writeTempModule(t)
+
+	config := testredundancy.Config{
+		BaselineTests: []testredundancy.BaselineTestSpec{
+			{Package: "github.com/%%%", TestPattern: "TestProperty_"},
+		},
+		CoverageThreshold: 0,
+		PackageToAnalyze:  "./...",
+		CoveragePackages:  "./...",
+	}
+
+	_, err := runFindInModule(t, root, config)
+	if err == nil {
+		t.Fatal("expected error for invalid package pattern")
 	}
 }
 
@@ -104,4 +152,24 @@ func captureOutput(fn func() error) (string, error) {
 	}
 
 	return string(out), callErr
+}
+
+func runFindInModule(t *testing.T, root string, config testredundancy.Config) (string, error) {
+	t.Helper()
+
+	oldWD, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		_ = os.Chdir(oldWD)
+	}()
+
+	if err := os.Chdir(root); err != nil {
+		return "", err
+	}
+
+	return captureOutput(func() error {
+		return testredundancy.Find(config)
+	})
 }
