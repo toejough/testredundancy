@@ -28,15 +28,14 @@ func TestExpandPackagesReturnsModuleRoot(t *testing.T) {
 }
 
 func TestExpandPackagesInvalidPattern(t *testing.T) {
-	_, err := discovery.ExpandPackages("./...[")
+	_, err := discovery.ExpandPackages("github.com/%%%")
 	if err == nil {
 		t.Fatal("expected error for invalid package pattern")
 	}
 }
 
 func modulePath() (string, error) {
-	out, err := exec.Command("go", "list", "-m", "-f", "{{.Path}}"
-	).Output()
+	out, err := exec.Command("go", "list", "-m", "-f", "{{.Path}}").Output()
 	if err != nil {
 		return "", err
 	}

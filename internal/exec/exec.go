@@ -22,6 +22,19 @@ func Output(ctx context.Context, command string, args ...string) (string, error)
 	return strings.TrimSuffix(buf.String(), "\n"), err
 }
 
+// OutputInDir runs a command in the provided directory and captures stdout only.
+func OutputInDir(ctx context.Context, dir string, command string, args ...string) (string, error) {
+	buf := &bytes.Buffer{}
+	cmd := exec.CommandContext(ctx, command, args...)
+	cmd.Dir = dir
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = buf
+	cmd.Stderr = os.Stderr
+	err := cmd.Run()
+
+	return strings.TrimSuffix(buf.String(), "\n"), err
+}
+
 // RunQuietCoverage runs a command and filters out expected coverage warnings.
 func RunQuietCoverage(command string, arg ...string) error {
 	cmd := exec.Command(command, arg...)
