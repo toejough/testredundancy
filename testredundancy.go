@@ -19,7 +19,7 @@ import (
 // BaselineTestSpec specifies a baseline test for redundancy analysis.
 type BaselineTestSpec struct {
 	Package     string // Package path (e.g., "./impgen/run" or "./UAT/...")
-	TestPattern string // Test name pattern for -run flag (empty string runs all tests in package)
+	TestPattern string // Test name pattern for -run flag (empty string matches no tests)
 }
 
 // Config configures the redundant test analysis.
@@ -59,18 +59,6 @@ func Find(config Config) error {
 		if spec.TestPattern != "" {
 			for _, pkg := range packages {
 				baselinePatterns[pkg] = spec.TestPattern
-			}
-		} else {
-			for _, pkg := range packages {
-				// List all test functions in package
-				pkgTests, err := discovery.ListTests(pkg)
-				if err != nil {
-					fmt.Printf("  Warning: couldn't list tests in %s: %v\n", pkg, err)
-				} else {
-					for _, t := range pkgTests {
-						baselineTestSet[t.QualifiedName()] = true
-					}
-				}
 			}
 		}
 	}
